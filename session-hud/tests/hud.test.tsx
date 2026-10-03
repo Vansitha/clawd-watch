@@ -51,22 +51,26 @@ test('/handoff writes a starter prompt and the pill clears and starts it', async
     const { Box } = $.ui.resolve(e)
     return <Box key="engine" />
   })
-  await $.command.run({
-    command: 'handoff',
-    args: '',
-    origin: { kind: 'composer' },
-    presentation: { isFullscreen: true, columns: 120 },
-  })
-  await clock.advance(10)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    ran.length = 0
+    submitted = ''
+    await $.command.run({
+      command: 'handoff',
+      args: '',
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: true, columns: 120 },
+    })
+    await clock.advance(10)
 
-  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: 'Build the login page' })).toBeDefined()
-  await ui.press({ key: 'handoff-start' })
+    const ui = await $.ui.mount({ ...band(), surface })
+    expect(await ui.find({ type: 'Text', text: 'Build the login page' })).toBeDefined()
+    await ui.press({ key: 'handoff-start' })
 
-  expect(ran).toEqual(['clear'])
-  expect(submitted).toBe('You are continuing the login work.')
-  expect(await ui.find({ key: 'handoff-start' })).toBeUndefined()
-  await ui.unmount()
+    expect(ran).toEqual(['clear'])
+    expect(submitted).toBe('You are continuing the login work.')
+    expect(await ui.find({ key: 'handoff-start' })).toBeUndefined()
+    await ui.unmount()
+  }
 })
 
 test('a running subagent shows its task, then finishes', async ($, on) => {
@@ -86,9 +90,14 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
     fork: false,
   })
 
-  const ui = await $.ui.mount({ ...band(), surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: '1 subagent working' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Find auth handlers/ })).toBeDefined()
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const view = await $.ui.mount({ ...band(), surface })
+    expect(await view.find({ type: 'Text', text: '1 subagent working' })).toBeDefined()
+    expect(await view.find({ type: 'Text', text: /Find auth handlers/ })).toBeDefined()
+    await view.unmount()
+  }
+
+  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
 
   await $.turn.complete({
     answer: 'found',

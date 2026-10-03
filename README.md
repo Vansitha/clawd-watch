@@ -37,6 +37,13 @@ Or load it in every session by adding to `~/.claude/settings.json`:
 { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/claude-mods/session-hud" } }
 ```
 
+### Where it works
+
+- **Terminal** (`claude` in any terminal): everything.
+- **Desktop app, Code tab** (local sessions): everything. The buttons are native and clickable. The desktop app can't take `--plugin-dir`, so load it through `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` as above, then start a new session.
+- **VS Code extension and mobile**: not supported. Claude Code doesn't draw the band above the prompt there, so nothing shows. The `/handoff` command still runs, but its pill can't appear.
+- **Cloud sessions** run on a remote machine, so the mod has to be loaded in that environment, not on your computer.
+
 ### Develop
 
 ```sh
