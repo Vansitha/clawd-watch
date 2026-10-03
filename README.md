@@ -25,16 +25,19 @@ In the fullscreen terminal the pill's buttons are clickable. Otherwise focus the
 
 ### Install
 
-Load it for one session:
+On macOS or Linux, run:
 
 ```sh
-claude --plugin-dir /path/to/claude-mods/session-hud
+git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
+~/.claude/mods/claude-mods/install.sh
 ```
 
-Or load it in every session by adding to `~/.claude/settings.json`:
+Then quit and reopen the desktop app, or start a new `claude` session. The installer adds the mod to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, keeping everything else there, and saves the old file as `settings.json.bak`. Run `install.sh` again to update.
 
-```json
-{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/claude-mods/session-hud" } }
+To load it for one session only instead:
+
+```sh
+claude --plugin-dir ~/.claude/mods/claude-mods/session-hud
 ```
 
 ### Where it works
