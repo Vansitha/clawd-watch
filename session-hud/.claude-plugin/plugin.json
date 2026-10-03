@@ -1,0 +1,9 @@
+{
+  "name": "session-hud",
+  "version": "0.1.0",
+  "description": "Subtle 5-hour usage meter, live subagent progress with ETAs, and a one-click handoff to a fresh session, all above the prompt.",
+  "author": {
+    "name": "Vansitha"
+  },
+  "types": "./types/index.d.ts"
+}
