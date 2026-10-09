@@ -18,6 +18,10 @@ const band = (bodyColumns = 120) => ({
 })
 
 test('the 5-hour meter shows above the prompt once a reading arrives', async ($, on) => {
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box key="engine" />
+  })
   on('session.measure', ($, e) => ({ changed: e.changed }))
   await $.session.measure({
     context: { window: 200_000, percent: 12 },
@@ -28,6 +32,8 @@ test('the 5-hour meter shows above the prompt once a reading arrives', async ($,
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...band(), surface })
     expect(await ui.find({ type: 'Text', text: /43%.*resets/ })).toBeDefined()
+    // What other mods drew above the prompt stays, above the meter.
+    expect(await ui.find({ key: 'engine' })).toBeDefined()
     await ui.unmount()
   }
 })
@@ -78,6 +84,10 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
   mock.store(on)
   on('agent.spawn', () => ({ model: 'm', agentId: 'agent-1' }))
   on('turn.complete', () => ({ text: '' }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box key="engine" />
+  })
 
   await $.agent.spawn({
     tool_use_id: 'toolu_1',

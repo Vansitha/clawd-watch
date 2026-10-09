@@ -1,0 +1,7 @@
+{
+  "name": "skill-dock",
+  "version": "0.1.0",
+  "description": "Pinned and most-used skills in one row above the prompt, plus a searchable skills pane. Click a skill to put it in the prompt.",
+  "author": { "name": "Vansitha" },
+  "types": "./types/index.d.ts"
+}

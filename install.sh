@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/Vansitha/claude-mods.git"
-MODS="session-hud"
+MODS="session-hud skill-dock"
 SETTINGS="$HOME/.claude/settings.json"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"

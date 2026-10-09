@@ -449,7 +449,9 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
+    // Other mods' rows (the skill dock) go above ours.
+    const above = await next(e)
+    if (e.props.hasSurvey) return above
 
     const [rate, list, tickAt, pending] = await Promise.all([
       read($, fiveHour),
@@ -460,7 +462,7 @@ export const register: Register = on => {
     const at = Math.max(tickAt, ...list.map(run => run.endedAt ?? run.startedAt))
     const shown = list.filter(run => isShown(run, at))
 
-    if (!rate && shown.length === 0 && !pending) return next(e)
+    if (!rate && shown.length === 0 && !pending) return above
 
     const { Box, Text, Button } = $.ui.resolve(e)
     const cols = Math.max(20, e.props.bodyColumns)
@@ -592,6 +594,11 @@ export const register: Register = on => {
       )
     }
 
-    return <Box flexDirection="column">{rows}</Box>
+    return (
+      <Box flexDirection="column">
+        {above}
+        {rows}
+      </Box>
+    )
   })
 }

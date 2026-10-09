@@ -23,7 +23,25 @@ A small heads-up display above the prompt box.
 
 In the fullscreen terminal the pill's buttons are clickable. Otherwise focus the band with `ctrl+x tab`, then press `s` (start), `c` (copy) or `x` (dismiss).
 
-### Install
+## skill-dock
+
+Your pinned and most-used skills in one row above the prompt, so you don't have to remember their names.
+
+```
+★ code-review  ★ pdf  ↻ simplify 18×  ↻ xlsx 11×  ↻ dataviz 9×        ⌕ All skills (31)
+```
+
+- **Click a skill** to put `/skill-name` at the front of the prompt box, keeping anything you'd already typed. Add details and press Enter.
+- **★ Pinned** skills come first, in the order you pinned them. **↻** marks your 5 most-used skills. Recent use counts most: a use a week ago is worth half a use today, so skills you've stopped using drift out.
+- A use counts whether you typed `/name` or Claude loaded the skill on its own. Pins and usage are saved across sessions and projects.
+- **All skills** (or `/dock`) opens a pane on the right with a filter box and three sections: pinned, frequently used, and every skill grouped by where it comes from. Click ☆ to pin. Press Enter in the filter to insert the first match. Where the app can't show a side pane, the list opens inside the dock instead.
+- `/dock pin <skill>` and `/dock unpin <skill>` pin from the prompt.
+- In the `/` menu, pinned skills say `★ pinned` and used ones say how often you used them this month. Claude Code doesn't let a mod reorder that menu, only add to its text.
+- Built-in skills such as `simplify` look like ordinary built-in commands until you use them once. After that they show up in the list.
+
+skill-dock and session-hud work together: the dock row sits above the subagent rows and the usage meter.
+
+## Install
 
 On macOS or Linux, run:
 
@@ -32,12 +50,12 @@ git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
 ~/.claude/mods/claude-mods/install.sh
 ```
 
-Then quit and reopen the desktop app, or start a new `claude` session. The installer adds the mod to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, keeping everything else there, and saves the old file as `settings.json.bak`. Run `install.sh` again to update.
+Then quit and reopen the desktop app, or start a new `claude` session. The installer adds both mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, keeping everything else there, and saves the old file as `settings.json.bak`. Run `install.sh` again to update.
 
-To load it for one session only instead:
+To load them for one session only instead:
 
 ```sh
-claude --plugin-dir ~/.claude/mods/claude-mods/session-hud
+claude --plugin-dir ~/.claude/mods/claude-mods/session-hud --plugin-dir ~/.claude/mods/claude-mods/skill-dock
 ```
 
 ### Where it works
@@ -50,6 +68,6 @@ claude --plugin-dir ~/.claude/mods/claude-mods/session-hud
 ### Develop
 
 ```sh
-claude plugin validate session-hud
-claude plugin test session-hud
+claude plugin validate session-hud && claude plugin test session-hud
+claude plugin validate skill-dock && claude plugin test skill-dock
 ```
