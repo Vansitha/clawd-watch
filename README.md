@@ -92,7 +92,7 @@ Queue a message for Claude to read **after** it finishes what it's doing, instea
 - If you stop Claude with Esc, the queue pauses so it doesn't start the next task without you. Press **Send next** when you're ready.
 - Messages with images can't be queued, so they're sent right away.
 
-### Queue with Shift+Cmd+Enter
+### Queue with Cmd+Enter
 
 Add this to `~/.claude/keybindings.json`, merging it with anything already there:
 
@@ -101,12 +101,12 @@ Add this to `~/.claude/keybindings.json`, merging it with anything already there
   "$schema": "https://www.schemastore.org/claude-code-keybindings.json",
   "$docs": "https://code.claude.com/docs/en/keybindings",
   "bindings": [
-    { "context": "Chat", "bindings": { "shift+cmd+enter": "chat:queueSubmit" } }
+    { "context": "Chat", "bindings": { "cmd+enter": "chat:queueSubmit" } }
   ]
 }
 ```
 
-Shift+Cmd+Enter then queues, and Shift+Enter still starts a new line. The terminal only sees Cmd if it reports it (kitty and Ghostty do; Terminal.app and many others don't). Where it doesn't, `ctrl+x enter` and `/queue <message>` always work.
+Cmd+Enter then queues, and Shift+Enter still starts a new line. The terminal only sees Cmd if it reports it (kitty and Ghostty do; Terminal.app and many others don't). Where it doesn't, `ctrl+x enter` and `/queue <message>` always work.
 
 ## skill-dock
 

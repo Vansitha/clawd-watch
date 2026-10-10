@@ -104,6 +104,33 @@ test('queued messages go one at a time, in order, and can be reordered', async (
   expect(sent).toEqual(['first', 'third'])
 })
 
+test('one finished task sends one queued message, even if the end is reported twice', async ($, on) => {
+  const { sent, clock } = engine(on)
+  await $.turn.start({ text: 'build it', turnId: 't1' })
+  await $.prompt.submit(typed('first', true))
+  await $.prompt.submit(typed('second', true))
+
+  await $.turn.complete(finished('answer'))
+  await $.turn.complete(finished('answer'))
+  await clock.advance(300)
+  expect(sent).toEqual(['first'])
+})
+
+test('a message typed just as Claude finishes goes first, and the queue waits for it', async ($, on) => {
+  const { sent, clock } = engine(on)
+  await $.turn.start({ text: 'build it', turnId: 't1' })
+  await $.prompt.submit(typed('queued', true))
+
+  await $.turn.complete(finished('answer'))
+  await $.turn.start({ text: 'typed now', turnId: 't2' })
+  await clock.advance(300)
+  expect(sent).toEqual([])
+
+  await $.turn.complete({ ...finished('answer'), turnId: 't2' })
+  await clock.advance(300)
+  expect(sent).toEqual(['queued'])
+})
+
 test('stopping Claude pauses the queue until you send the next one', async ($, on) => {
   const { sent, clock } = engine(on)
   await $.turn.start({ text: 'build it', turnId: 't1' })

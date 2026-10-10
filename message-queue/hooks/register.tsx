@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { ElementTable, EngineInterface, Register, RenderSurface } from 'claude-code'
+import type { ElementTable, EngineInterface, Register, RenderSurface, Timer } from 'claude-code'
 
 import type { QueuedMessage } from '../types'
 
@@ -24,7 +24,11 @@ const QUEUED_NOTICE = `Queued. ${AFTER_TASK}`
 const WAITING_NOTE = 'Sent one at a time, each after Claude finishes.'
 const PAUSED_NOTE = 'Paused because you stopped Claude.'
 
-const local = { isWorking: false, isSending: false, nextId: 1 }
+const local: { isWorking: boolean; isSending: boolean; nextId: number; pendingSend?: Timer } = {
+  isWorking: false,
+  isSending: false,
+  nextId: 1,
+}
 
 /** Whether a drawn tree already holds an element with this key. */
 function hasKey(node: unknown, key: string): boolean {
@@ -273,8 +277,16 @@ export const register: Register = (on, options) => {
     const [list, paused] = await Promise.all([read($, messages), read($, isPaused)])
     if (list.length === 0 || !(await isActive($, showIn))) return result
 
+    // One send per finished task: a repeated end replaces the pending send, and a turn that
+    // starts first (a message typed just then) goes ahead, its own end sending this.
+    local.pendingSend?.cancel()
     if (e.reason === 'answer') {
-      if (!paused) $.clock.after(SEND_DELAY_MS, () => void sendNext($))
+      if (!paused) {
+        local.pendingSend = $.clock.after(SEND_DELAY_MS, () => {
+          local.pendingSend = undefined
+          if (!local.isWorking) void sendNext($)
+        })
+      }
     } else {
       // The person stopped the turn: hold the queue until they send it.
       await update($, isPaused, () => true)
