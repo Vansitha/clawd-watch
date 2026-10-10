@@ -332,7 +332,8 @@ export const register: Register = on => {
     await $.command
       .register({
         name: 'handoff',
-        description: 'Write a starter prompt for a fresh session; a pill above the prompt starts it',
+        description:
+          'Write a starter prompt for a fresh session; a pill above the prompt starts it',
         argumentHint: '[focus] | auto on | auto off',
       })
       .catch(() => undefined)
@@ -556,7 +557,8 @@ export const register: Register = on => {
       shown.slice(-Math.max(1, Math.floor((e.props.maxRows - 3) / 2))).forEach(run => {
         const { elapsed, progress, remaining } = estimate(run, at)
         const isRunning = run.status === 'running'
-        const glyph = isRunning ? spin : run.status === 'done' ? '✓' : '✗'
+        // Braille spinners read as stray dots in a proportional font.
+        const glyph = isRunning ? (isDesktop ? '●' : spin) : run.status === 'done' ? '✓' : '✗'
         const tone = run.status === 'failed' ? ERROR : run.status === 'done' ? SUCCESS : ACCENT
         const percent = Math.round(progress * 100)
         const timing = isRunning

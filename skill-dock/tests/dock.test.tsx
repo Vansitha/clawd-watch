@@ -73,7 +73,7 @@ test('pinned and frequently used skills sit in the dock, and a click fills the p
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ ...band, surface })
     expect((await ui.find({ key: 'dock-pin-anthropic-skills:pdf' }))?.props.label).toBe('★ pdf')
-    expect((await ui.find({ key: 'dock-freq-simplify' }))?.props.label).toBe('↻ simplify 2×')
+    expect((await ui.find({ key: 'dock-freq-simplify' }))?.props.label).toBe('simplify')
     expect(await ui.find({ key: 'dock-freq-clear' })).toBeUndefined()
 
     await ui.press({ key: 'dock-freq-simplify' })
@@ -168,7 +168,7 @@ test('where no pane can be placed, All skills opens the list inside the dock', a
   const ui = await $.ui.mount({ ...band, surface: 'desktop' })
   await ui.press({ key: 'dock-all' })
   expect(await ui.find({ key: 'filter' })).toBeDefined()
-  expect((await ui.find({ key: 'dock-all' }))?.props.label).toBe('× Close skills')
+  expect((await ui.find({ key: 'dock-all' }))?.props.label).toBe('Close')
 
   await ui.press({ key: 'dock-all' })
   expect(await ui.find({ key: 'filter' })).toBeUndefined()

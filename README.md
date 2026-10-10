@@ -1,5 +1,7 @@
 # claude-mods
 
+![session-hud and skill-dock in the Claude desktop app](docs/preview.png)
+
 Mods for Claude Code: plugins of function hooks that draw UI and react to events inside a session.
 
 ## session-hud
@@ -32,11 +34,11 @@ In the fullscreen terminal the pill's buttons are clickable. Otherwise focus the
 Your pinned and most-used skills in one row above the prompt, so you don't have to remember their names.
 
 ```
-★ code-review  ★ pdf  ↻ simplify 18×  ↻ xlsx 11×  ↻ dataviz 9×        ⌕ All skills (31)
+Skills  [★ code-review] [★ pdf]  │  [simplify] [xlsx] [dataviz]            All skills (31) ›
 ```
 
 - **Click a skill** to put `/skill-name` at the front of the prompt box, keeping anything you'd already typed. Add details and press Enter.
-- **★ Pinned** skills come first, in the order you pinned them. **↻** marks your 5 most-used skills. Recent use counts most: a use a week ago is worth half a use today, so skills you've stopped using drift out.
+- **★ Pinned** skills come first, in the order you pinned them, then up to 5 of your most-used skills, as many as fit the width. Recent use counts most: a use a week ago is worth half a use today, so skills you've stopped using drift out.
 - A use counts whether you typed `/name` or Claude loaded the skill on its own. Pins and usage are saved across sessions and projects.
 - **All skills** (or `/dock`) opens a pane on the right with a filter box and three sections: pinned, frequently used, and every skill grouped by where it comes from. Click ☆ to pin. Press Enter in the filter to insert the first match. Where the app can't show a side pane, the list opens inside the dock instead.
 - `/dock pin <skill>` and `/dock unpin <skill>` pin from the prompt.

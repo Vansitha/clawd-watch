@@ -22,6 +22,9 @@ const PANE_FREQUENT = 8
 
 const GROUP_ORDER = ['Yours & this project', 'Plugins', 'Built-in', 'MCP']
 
+// Claude's orange, matching session-hud; reads on light and dark backgrounds.
+const ACCENT = '#d97757'
+
 export function score(times: readonly number[] = [], at: number): number {
   return times.reduce((sum, t) => sum + Math.pow(0.5, (at - t) / HALF_LIFE), 0)
 }
@@ -171,11 +174,42 @@ function skillList(
     (a, b) => groupRank(a) - groupRank(b) || a.localeCompare(b),
   )
 
-  const row = (section: string, s: SkillEntry, meta: string, bar?: string) => {
+  // A short rounded bar where the surface draws SVG, a run of blocks in the terminal.
+  const meter = (key: string, fraction: number) => {
+    const f = Math.min(1, Math.max(0, fraction))
+    if ('Svg' in t) {
+      const { Svg } = t
+      const filled = Math.max(5, Math.round(56 * f))
+      const source =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="5" viewBox="0 0 56 5">` +
+        `<rect width="56" height="5" rx="2.5" fill="#8b8b8b" fill-opacity="0.25"/>` +
+        `<rect width="${filled}" height="5" rx="2.5" fill="${ACCENT}"/></svg>`
+
+      return (
+        <Svg
+          key={key}
+          source={source}
+          alt={`${Math.round(f * 100)}% of your top skill`}
+          width={56}
+          height={5}
+        />
+      )
+    }
+    const cells = Math.max(1, Math.round(f * 8))
+
+    return (
+      <Box flexDirection="row">
+        <Text color={ACCENT}>{'━'.repeat(cells)}</Text>
+        <Text dimColor>{'─'.repeat(8 - cells)}</Text>
+      </Box>
+    )
+  }
+
+  const row = (section: string, s: SkillEntry, meta: string, share?: number) => {
     const isPinned = pinned.includes(s.name)
 
     return (
-      <Box flexDirection="row" gap={1}>
+      <Box flexDirection="row" gap={1} alignItems="center">
         <Button
           key={`${section}-star-${s.name}`}
           plain
@@ -189,16 +223,16 @@ function skillList(
         <Button
           key={`${section}-use-${s.name}`}
           plain
-          label={s.name}
+          label={short(s.name)}
           onPress={() => insertSkill($, s.name)}
         />
-        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        <Box flexGrow={1} flexShrink={1} minWidth={0} marginLeft={1}>
           <Text dimColor wrap="truncate-end">
             {s.description}
           </Text>
         </Box>
-        {bar !== undefined && <Text color="cyan">{bar}</Text>}
-        <Text dimColor>{meta}</Text>
+        {share !== undefined && meter(`${section}-bar-${s.name}`, share)}
+        {meta !== '' && <Text dimColor>{meta}</Text>}
       </Box>
     )
   }
@@ -208,7 +242,15 @@ function skillList(
       <Text dimColor bold>
         {left.toUpperCase()}
       </Text>
-      <Text dimColor>{right}</Text>
+      {right !== '' && <Text dimColor>{right}</Text>}
+    </Box>
+  )
+
+  const empty = (text: string) => (
+    <Box paddingLeft={2}>
+      <Text dimColor italic>
+        {text}
+      </Text>
     </Box>
   )
 
@@ -227,46 +269,25 @@ function skillList(
           }}
         />
       )}
-      {title('Pinned', pinned.length ? `${pinned.length} pinned` : '')}
-      {pinnedShown.length === 0 && (
-        <Text dimColor>
-          {query ? 'No pinned skills match.' : 'Click ☆ on any skill to pin it here.'}
-        </Text>
-      )}
-      {pinnedShown.map(s =>
-        row(
-          'pinned',
-          s,
-          used[s.name]?.length
-            ? `${recentCount(used[s.name], at)}× · ${ago(used[s.name], at)}`
-            : '',
-        ),
-      )}
+      {title('Pinned', pinned.length ? `${pinned.length}` : '')}
+      {pinnedShown.length === 0 &&
+        empty(query ? 'No pinned skills match.' : 'Click ☆ next to any skill to pin it.')}
+      {pinnedShown.map(s => row('pinned', s, used[s.name]?.length ? ago(used[s.name], at) : ''))}
       {title('Frequently used', 'last 30 days')}
-      {freqShown.length === 0 && (
-        <Text dimColor>{query ? 'Nothing matches.' : 'Skills you use show up here.'}</Text>
-      )}
+      {freqShown.length === 0 &&
+        empty(query ? 'Nothing matches.' : 'Skills you use will show up here.')}
       {freqShown.map(s =>
-        row(
-          'freq',
-          s,
-          `${recentCount(used[s.name], at)}×`,
-          '▇'.repeat(Math.max(1, Math.round((score(used[s.name], at) / top) * 8))),
-        ),
+        row('freq', s, `${recentCount(used[s.name], at)}×`, score(used[s.name], at) / top),
       )}
       {title('All skills', `${list.length}`)}
-      {all.length === 0 && <Text dimColor>{`No skills match "${query}".`}</Text>}
-      {groups.map(group => (
-        <Box flexDirection="column">
-          <Text dimColor italic>
-            {group}
-          </Text>
+      {all.length === 0 && empty(`No skills match "${query}".`)}
+      {groups.map((group, index) => (
+        <Box flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+          <Text dimColor>{group}</Text>
           {all
             .filter(s => s.group === group)
             .sort((a, b) => a.name.localeCompare(b.name))
-            .map(s =>
-              row('all', s, used[s.name]?.length ? `${recentCount(used[s.name], at)}×` : ''),
-            )}
+            .map(s => row('all', s, ''))}
         </Box>
       ))}
     </Box>
@@ -342,40 +363,73 @@ export const register: Register = on => {
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
 
-    const chips = [
-      ...pinned.map(name => (
-        <Button
-          key={`dock-pin-${name}`}
-          label={`★ ${short(name)}`}
-          onPress={() => insertSkill($, name)}
-        />
-      )),
-      ...freq.map(s => (
-        <Button
-          key={`dock-freq-${s.name}`}
-          dimColor
-          label={`↻ ${short(s.name)} ${recentCount(used[s.name], at)}×`}
-          onPress={() => insertSkill($, s.name)}
-        />
-      )),
-    ]
+    const isDesktop = e.surface === 'desktop'
+    // Fit as many chips as the row holds; the rest are a click away in All skills.
+    const allLabel = inline ? 'Close' : `All skills (${list.length}) ›`
+    let room = e.props.bodyColumns - 'Skills'.length - allLabel.length - 8
+    const fits = (label: string) => {
+      const width = label.length + 5
+      if (width > room) return false
+      room -= width
+      return true
+    }
+    const pinLabels = pinned
+      .map(name => ({ name, label: `★ ${short(name)}` }))
+      .filter(c => fits(c.label))
+    if (pinLabels.length > 0) room -= 3
+    const freqLabels = freq
+      .map(s => ({ name: s.name, label: short(s.name) }))
+      .filter(c => fits(c.label))
+
+    const pinChips = pinLabels.map(c => (
+      <Button key={`dock-pin-${c.name}`} label={c.label} onPress={() => insertSkill($, c.name)} />
+    ))
+    const freqChips = freqLabels.map(c => (
+      <Button
+        key={`dock-freq-${c.name}`}
+        dimColor
+        label={c.label}
+        onPress={() => insertSkill($, c.name)}
+      />
+    ))
+    // Leave a row between the dock and the next mod's rows, when there are any.
+    const hasBelow = ((below as { children?: unknown[] }).children?.length ?? 0) > 0
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" gap={1}>
-          <Box flexDirection="row" gap={1} flexShrink={1} overflow="hidden">
-            {chips.length === 0 && <Text dimColor>Skills</Text>}
-            {chips}
+        <Box
+          flexDirection="row"
+          justifyContent="space-between"
+          alignItems="center"
+          gap={2}
+          marginBottom={isDesktop && (hasBelow || inline) ? 1 : 0}
+        >
+          <Box flexDirection="row" gap={1} alignItems="center" flexShrink={1} overflow="hidden">
+            <Text bold dimColor>
+              Skills
+            </Text>
+            {pinChips.length + freqChips.length === 0 && (
+              <Text dimColor italic>
+                Pin or use a skill and it appears here
+              </Text>
+            )}
+            {pinChips}
+            {pinChips.length > 0 && freqChips.length > 0 && <Text dimColor>│</Text>}
+            {freqChips}
           </Box>
           <Button
             key="dock-all"
             plain
             dimColor
-            label={inline ? '× Close skills' : `⌕ All skills (${list.length})`}
+            label={allLabel}
             onPress={() => (inline ? update($, isInline, () => false) : openAll($))}
           />
         </Box>
-        {inline && skillList($, t, { list, pinned, used, query, at })}
+        {inline && (
+          <Box flexDirection="column" marginBottom={isDesktop && hasBelow ? 1 : 0}>
+            {skillList($, t, { list, pinned, used, query, at })}
+          </Box>
+        )}
         {below}
       </Box>
     )
