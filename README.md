@@ -18,27 +18,34 @@ Each mod adds a section to the panel above the prompt. The sections share one la
 
 **Requirements:** a Claude Code build with mods (plugins of function hooks). These were built against Claude Code 2.1.288. The mods API is in early access and may change between releases.
 
-On macOS or Linux, run:
+### With Claude
+
+Paste this into Claude Code:
+
+```
+Install claude-mods for me: clone https://github.com/Vansitha/claude-mods into ~/.claude/mods/claude-mods and follow the INSTALL.md inside it.
+```
+
+Claude clones the repo, runs the installer (or does the same by hand on Windows), checks each mod, and tells you what to do next. It asks before changing any keys. The steps it follows are in [INSTALL.md](INSTALL.md).
+
+### By hand (macOS or Linux)
 
 ```sh
 git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
 ~/.claude/mods/claude-mods/install.sh
 ```
 
-Then quit and reopen the Claude desktop app, or start a new `claude` session. Run `install.sh` again any time to update.
+Then quit and reopen the Claude desktop app, or start a new `claude` session. Type `/` in the prompt: `/dock`, `/queue` and `/handoff` should be in the list.
 
-The installer adds the three mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. It keeps everything else in that file and saves the old one as `settings.json.bak`.
+The installer adds the three mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` and keeps everything else there. It saves the old file as `settings.json.bak`, then checks each mod. Run it again any time to update.
 
-To try them in one terminal session without changing your settings, skip `install.sh` and run:
+| To | Run |
+| --- | --- |
+| Update | `~/.claude/mods/claude-mods/install.sh` (it pulls the latest version first) |
+| Uninstall | `~/.claude/mods/claude-mods/install.sh --uninstall` |
+| Try them in one terminal session without changing your settings | `cd ~/.claude/mods/claude-mods && claude --plugin-dir session-hud --plugin-dir message-queue --plugin-dir skill-dock` |
 
-```sh
-cd ~/.claude/mods/claude-mods
-claude --plugin-dir session-hud --plugin-dir message-queue --plugin-dir skill-dock
-```
-
-On Windows, clone the repo anywhere and add the three mod folders to `CLAUDE_CODE_PLUGIN_DIRS` in `%USERPROFILE%\.claude\settings.json` yourself, separated by `;`. `install.sh` doesn't run on Windows.
-
-To uninstall, remove the three paths from `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, then delete `~/.claude/mods/claude-mods`.
+On Windows, follow [INSTALL.md](INSTALL.md) step 3b, or ask Claude to.
 
 ## session-hud
 

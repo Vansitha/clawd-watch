@@ -1,26 +1,65 @@
 #!/usr/bin/env bash
 # Installs the claude-mods mods for every Claude Code session (terminal and desktop app):
 # keeps a clone of this repo and lists each mod in CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json.
-# Run it again to update. Set CLAUDE_MODS_DIR to keep the clone somewhere else.
+#
+#   ./install.sh               install, or update an existing install
+#   ./install.sh --uninstall   remove the mods from settings.json (the clone stays)
+#
+# Set CLAUDE_MODS_DIR to keep the clone somewhere other than ~/.claude/mods/claude-mods.
+# Safe to run again: it never adds a path twice and backs settings.json up first.
 set -euo pipefail
 
 REPO_URL="https://github.com/Vansitha/claude-mods.git"
-MODS="session-hud skill-dock message-queue"
+MODS="session-hud message-queue skill-dock"
 SETTINGS="$HOME/.claude/settings.json"
 
+mode="install"
+case "${1:-}" in
+  "") ;;
+  --uninstall) mode="uninstall" ;;
+  -h | --help)
+    sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  *)
+    echo "Unknown option: $1 (use --uninstall or --help)" >&2
+    exit 2
+    ;;
+esac
+
+fail() {
+  echo "✗ $*" >&2
+  exit 1
+}
+
+# Use the clone this script is in; otherwise clone (or update) the default one.
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
 if [ -n "$here" ] && [ -f "$here/session-hud/.claude-plugin/plugin.json" ]; then
   dir="$here"
-  echo "Using this clone: $dir"
 else
   dir="${CLAUDE_MODS_DIR:-$HOME/.claude/mods/claude-mods}"
-  if [ -d "$dir/.git" ]; then
-    echo "Updating $dir"
-    git -C "$dir" pull --ff-only --quiet
+fi
+
+if [ "$mode" = "install" ]; then
+  if [ "$dir" != "$here" ]; then
+    command -v git >/dev/null 2>&1 || fail "git is not installed. Install git, then run this again."
+    if [ -d "$dir/.git" ]; then
+      echo "Updating $dir"
+      git -C "$dir" pull --ff-only --quiet || fail "Could not update $dir. Check 'git -C $dir status'."
+    else
+      echo "Cloning into $dir"
+      mkdir -p "$(dirname "$dir")"
+      git clone --quiet "$REPO_URL" "$dir" || fail "Could not clone $REPO_URL."
+    fi
   else
-    echo "Cloning into $dir"
-    mkdir -p "$(dirname "$dir")"
-    git clone --quiet "$REPO_URL" "$dir"
+    echo "Using this clone: $dir"
+    # Bring it up to date too, unless it has local changes or no upstream (a working copy).
+    if command -v git >/dev/null 2>&1 && [ -d "$dir/.git" ] &&
+      git -C "$dir" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1 &&
+      [ -z "$(git -C "$dir" status --porcelain)" ]; then
+      git -C "$dir" pull --ff-only --quiet ||
+        echo "! Could not update $dir; installing the version that's there."
+    fi
   fi
 fi
 
@@ -29,41 +68,90 @@ for mod in $MODS; do
   paths="${paths:+$paths:}$dir/$mod"
 done
 
-mkdir -p "$(dirname "$SETTINGS")"
-[ -f "$SETTINGS" ] && cp "$SETTINGS" "$SETTINGS.bak"
-
-merge_js='
+# Adds the paths to, or removes them from, env.CLAUDE_CODE_PLUGIN_DIRS; everything else is kept.
+edit_js='
 const fs = require("fs");
-const [file, add] = process.argv.slice(1);
+const [file, mode, given] = process.argv.slice(1);
 let settings = {};
-try { settings = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { if (e.code !== "ENOENT") throw e; }
+try {
+  settings = JSON.parse(fs.readFileSync(file, "utf8"));
+} catch (e) {
+  if (e.code !== "ENOENT") { console.error(file + " is not valid JSON, so it was left alone."); process.exit(3); }
+}
 settings.env = settings.env || {};
-const list = (settings.env.CLAUDE_CODE_PLUGIN_DIRS || "").split(":").filter(Boolean);
-for (const p of add.split(":")) if (!list.includes(p)) list.push(p);
-settings.env.CLAUDE_CODE_PLUGIN_DIRS = list.join(":");
+let list = (settings.env.CLAUDE_CODE_PLUGIN_DIRS || "").split(":").filter(Boolean);
+const paths = given.split(":");
+list = mode === "install" ? [...list, ...paths.filter(p => !list.includes(p))] : list.filter(p => !paths.includes(p));
+if (list.length) settings.env.CLAUDE_CODE_PLUGIN_DIRS = list.join(":");
+else delete settings.env.CLAUDE_CODE_PLUGIN_DIRS;
+if (!Object.keys(settings.env).length) delete settings.env;
 fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
 '
-merge_py='
+edit_py='
 import json, os, sys
-file, add = sys.argv[1], sys.argv[2]
-settings = json.load(open(file)) if os.path.exists(file) and os.path.getsize(file) else {}
+file, mode, given = sys.argv[1:4]
+settings = {}
+if os.path.exists(file) and os.path.getsize(file):
+    try:
+        settings = json.load(open(file))
+    except ValueError:
+        print(file + " is not valid JSON, so it was left alone.", file=sys.stderr)
+        sys.exit(3)
 env = settings.setdefault("env", {})
 items = [p for p in env.get("CLAUDE_CODE_PLUGIN_DIRS", "").split(":") if p]
-items += [p for p in add.split(":") if p not in items]
-env["CLAUDE_CODE_PLUGIN_DIRS"] = ":".join(items)
+paths = given.split(":")
+items = items + [p for p in paths if p not in items] if mode == "install" else [p for p in items if p not in paths]
+if items:
+    env["CLAUDE_CODE_PLUGIN_DIRS"] = ":".join(items)
+else:
+    env.pop("CLAUDE_CODE_PLUGIN_DIRS", None)
+if not env:
+    settings.pop("env")
 open(file, "w").write(json.dumps(settings, indent=2) + "\n")
 '
 
+mkdir -p "$(dirname "$SETTINGS")"
+[ -f "$SETTINGS" ] && cp "$SETTINGS" "$SETTINGS.bak"
+
 if command -v node >/dev/null 2>&1; then
-  node -e "$merge_js" "$SETTINGS" "$paths"
+  node -e "$edit_js" "$SETTINGS" "$mode" "$paths" || fail "settings.json was not changed."
 elif command -v python3 >/dev/null 2>&1; then
-  python3 -c "$merge_py" "$SETTINGS" "$paths"
+  python3 -c "$edit_py" "$SETTINGS" "$mode" "$paths" || fail "settings.json was not changed."
 else
   echo "Neither node nor python3 is installed, so settings.json was not changed."
-  echo "Add this to $SETTINGS yourself:"
-  echo "  { \"env\": { \"CLAUDE_CODE_PLUGIN_DIRS\": \"$paths\" } }"
+  echo "Add these paths to env.CLAUDE_CODE_PLUGIN_DIRS in $SETTINGS yourself, separated by ':'"
+  echo "  $paths"
   exit 1
 fi
 
-echo "Added to $SETTINGS: $paths"
-echo "Done. Start a new Claude Code session (quit and reopen the desktop app) to load it."
+if [ "$mode" = "uninstall" ]; then
+  echo "✓ Removed the mods from $SETTINGS (old copy: $SETTINGS.bak)."
+  echo "  Start a new Claude Code session to unload them. To delete the files too: rm -rf $dir"
+  exit 0
+fi
+
+echo "✓ Added to $SETTINGS (old copy: $SETTINGS.bak):"
+for mod in $MODS; do
+  echo "    $dir/$mod"
+done
+
+# Check each mod the way Claude Code will load it.
+if command -v claude >/dev/null 2>&1; then
+  failed=0
+  for mod in $MODS; do
+    if claude plugin validate "$dir/$mod" >/dev/null 2>&1; then
+      echo "✓ $mod is valid"
+    else
+      echo "✗ $mod did not validate: run 'claude plugin validate $dir/$mod' to see why"
+      failed=1
+    fi
+  done
+  if [ "$failed" = 1 ]; then
+    echo "Some mods did not validate. This Claude Code ($(claude --version 2>/dev/null | head -1)) may be too old: update it and run this again."
+    exit 1
+  fi
+else
+  echo "! The claude command isn't on your PATH, so the mods weren't checked. They load the next time Claude Code starts."
+fi
+
+echo "Done. Start a new Claude Code session (quit and reopen the desktop app) to load the mods."
