@@ -1,73 +1,80 @@
 # claude-mods
 
-![session-hud and skill-dock in the Claude desktop app](docs/preview.png)
+Three small mods that make Claude Code easier to work with: see when your subagents will finish, queue messages for after Claude is done, and keep your favourite skills one click away.
 
-Mods for Claude Code: plugins of function hooks that draw UI and react to events inside a session.
+![claude-mods in the Claude desktop app](docs/preview.png)
+
+| Mod | What it adds |
+| --- | --- |
+| [session-hud](#session-hud) | When your subagents will finish, and a one-click handoff to a fresh session |
+| [message-queue](#message-queue) | Messages that wait until Claude finishes, instead of steering the current task |
+| [skill-dock](#skill-dock) | Your pinned and most-used skills above the prompt |
+
+Each mod adds a section to the panel above the prompt. The sections share one layout, so together they read as a single panel.
+
+## Install
+
+On macOS or Linux:
+
+```sh
+git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
+~/.claude/mods/claude-mods/install.sh
+```
+
+Then quit and reopen the Claude desktop app, or start a new `claude` session. Run `install.sh` again any time to update.
+
+The installer adds the three mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. It keeps everything else in that file and saves the old one as `settings.json.bak`.
+
+To try them in one terminal session without installing:
+
+```sh
+cd ~/.claude/mods/claude-mods
+claude --plugin-dir session-hud --plugin-dir message-queue --plugin-dir skill-dock
+```
+
+**Requirements:** a Claude Code build with mods (plugins of function hooks). These were built against Claude Code 2.1.288. The mods API is in early access and may change between releases.
 
 ## session-hud
 
-A small heads-up display above the prompt box.
-
 ```
-Subagents                                    All done by ~5:59 PM  ·  in ~4m 46s
-● Build rooms: crew and seats                    done by ~5:57 PM  ·  ~3m 36s
-  ━━━━━━━──────────────  Reading crew-tokens.ts
-● Remove the hands overlay                       done by ~5:59 PM  ·  ~4m 46s
-  ━━━──────────────────  Editing Hand.tsx
-
-⇢ Build the upgrades screen               [Start fresh session] [Copy] [Dismiss]
-
-5-hour limit  ━━━━━━──────────────  30%  ·  resets 8:30 PM
+Subagents     All done by ~5:59 PM  ·  in ~4m 46s
+              ● Build rooms: crew and seats            done by ~5:57 PM  ·  ~3m 36s
+                ━━━━━━━──────────  Reading crew-tokens.ts
+              ● Remove the hands overlay               done by ~5:59 PM  ·  ~4m 46s
+                ━━━──────────────  Editing Hand.tsx
+Next session  Build the upgrades screen         [Start fresh session] [Copy] [Dismiss]
 ```
 
-In the desktop app the bars are drawn as rounded bars and the sections are spaced apart.
-- **5-hour usage meter**: a subtle horizontal bar showing the five-hour rate-limit window, its percentage and when it resets. It turns yellow at 70% and red at 90%. It updates with every model response, and shows only on a Claude subscription login (an API key has no five-hour window).
-- **Subagent panel**: while subagents run, a header says when they'll all be done, and each agent shows when it will be done, a progress bar and what it is doing right now. Claude Code does not report real progress for subagents, so progress and ETAs are estimates from elapsed time, steps taken and how long past subagents of the same type took. The mod remembers past runs across sessions, so estimates improve with use.
-- **Handoff pill**: one click on **Start fresh session** clears the conversation and submits a starter prompt for the next piece of work. You type nothing. The prompt is also copied to your clipboard.
-  - `/handoff` writes the starter prompt on demand. Add a focus if you like: `/handoff the payments refactor`.
-  - Every few turns (sooner once the context passes 30%) the mod asks Claude whether the next work would go better in a fresh session. When it would, the pill appears on its own, marked `✦` with the reason. An unused suggestion clears itself after 3 more turns, as it goes stale.
-  - `/handoff auto off` and `/handoff auto on` turn the automatic suggestions off or on.
+**Subagents.** While subagents run, the header says when they'll all be done. Each agent shows when it will be done, a progress bar, and what it's doing right now.
 
-In the fullscreen terminal the pill's buttons are clickable. Otherwise focus the band with `ctrl+x tab`, then press `s` (start), `c` (copy) or `x` (dismiss).
+Claude Code doesn't report real progress for subagents, so these are estimates. They're based on elapsed time, steps taken, and how long past subagents of the same type took. The mod remembers past runs across sessions, so estimates improve the more you use it.
 
-## skill-dock
+**Handoff to a fresh session.** **Start fresh session** clears the conversation and sends a starter prompt for the next piece of work, so you don't have to write one. The prompt is also copied to your clipboard.
 
-Your pinned and most-used skills in one row above the prompt, so you don't have to remember their names.
-
-```
-Skills  [★ code-review] [★ pdf]  │  [simplify] [xlsx] [dataviz]            All skills (31) ›
-```
-
-- **Click a skill** to put `/skill-name` at the front of the prompt box, keeping anything you'd already typed. Add details and press Enter.
-- **★ Pinned** skills come first, in the order you pinned them, then up to 5 of your most-used skills, as many as fit the width. "Most used" counts uses in the last 30 days, so skills you've stopped using drift out.
-- A use counts whether you typed `/name` or Claude loaded the skill on its own. Pins and usage are saved across sessions and projects.
-- **All skills** (or `/dock`) opens a pane on the right with three lists: **Pinned**, **Most used** (your top 10 over the last 30 days) and **Available here** (every skill you can use in this project, A to Z). Click ☆ to pin, or a name to put it in the prompt. Where the app can't show a side pane, the lists open inside the dock instead.
-- `/dock pin <skill>` and `/dock unpin <skill>` pin from the prompt.
-- In the `/` menu, pinned skills say `★ pinned` and used ones say how often you used them this month. Claude Code doesn't let a mod reorder that menu, only add to its text.
-- Built-in skills such as `simplify` look like ordinary built-in commands until you use them once. After that they show up in the list.
-
-skill-dock and session-hud work together: the dock row sits above the subagent rows and the usage meter.
+- `/handoff` writes the starter prompt on demand. Add a focus if you like: `/handoff the payments refactor`.
+- Every few turns, sooner once the context passes 30%, the mod asks Claude whether the next piece of work would go better in a fresh session. When it would, the section appears on its own as **Suggested**, with the reason. If you don't use it, it clears itself after 3 more turns.
+- `/handoff auto off` and `/handoff auto on` turn the automatic suggestions off or on.
 
 ## message-queue
 
-Queue a message for Claude to read **after** it finishes what it's doing, instead of steering the running task.
+```
+Queued (2)    1  Then add tests for the rooms screen and run them                   ✕
+              2  Update the README with the new crew and seats flow               ↑ ✕
+                 Sent one at a time, each after Claude finishes.
+```
 
-```
-Queued  2                                          sends when Claude finishes
-1  Then add tests for the rooms screen and run them                         ✕
-2  Update the README with the new crew and seats flow                     ↑ ✕
-```
+Queue a message for Claude to read **after** it finishes what it's doing, instead of steering the task it's on.
 
 - **Enter** works as always: a message typed while Claude works steers the current task.
-- **The queue key** (Claude Code's `chat:queueSubmit`, `ctrl+x enter` by default) holds the message instead. It waits above the prompt and goes to Claude as your next message once the current task ends.
-- **`/queue <message>`** does the same from the prompt, and works anywhere, the desktop app included. `/queue clear` empties the queue.
-- Queued messages go one at a time, in order. Each waits for the previous task to finish. Use ↑ to move one up, ✕ to remove it.
-- If you stop Claude (Esc), the queue pauses so it doesn't start the next task behind your back. Press **Send next** when you're ready.
-- Messages with images can't be queued; they're sent right away.
+- **The queue key** holds the message instead, and Claude reads it once the current task ends. This is Claude Code's `chat:queueSubmit`, `ctrl+x enter` by default.
+- **`/queue <message>`** does the same from the prompt, and works everywhere, the desktop app included. `/queue clear` empties the queue.
+- Queued messages go one at a time, in order, each after the previous task finishes. **↑** moves one up and **✕** removes it.
+- If you stop Claude with Esc, the queue pauses so it doesn't start the next task without you. Press **Send next** when you're ready.
+- Messages with images can't be queued, so they're sent right away.
 
 ### Queue with Shift+Enter
 
-Add this to `~/.claude/keybindings.json` (merge it with what's there):
+Add this to `~/.claude/keybindings.json`, merging it with anything already there:
 
 ```json
 {
@@ -79,36 +86,44 @@ Add this to `~/.claude/keybindings.json` (merge it with what's there):
 }
 ```
 
-Shift+Enter then queues instead of starting a new line; `ctrl+j` still adds a new line. Some terminals send Shift+Enter as a plain Enter: run `/terminal-setup` once if it doesn't work.
+Shift+Enter then queues instead of starting a new line; `ctrl+j` still adds one. Some terminals send Shift+Enter as a plain Enter. If yours does, run `/terminal-setup` once.
 
-## Install
+## skill-dock
 
-On macOS or Linux, run:
-
-```sh
-git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
-~/.claude/mods/claude-mods/install.sh
+```
+Skills        [★ code-review] [★ pdf] [★ deep-research]  │  [simplify] [xlsx]   All skills (12) ›
 ```
 
-Then quit and reopen the desktop app, or start a new `claude` session. The installer adds all three mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, keeping everything else there, and saves the old file as `settings.json.bak`. Run `install.sh` again to update.
+Your pinned skills and your most-used ones, one click away.
 
-To load them for one session only instead:
+- **Click a skill** to put `/skill-name` at the front of the prompt box, keeping anything you'd already typed. Add details and press Enter.
+- **★ Pinned skills** come first, then your most-used ones, as many as fit the width. "Most used" counts how often you used each skill in the last 30 days, whether you typed `/name` or Claude loaded it.
+- **All skills ›** (or `/dock`) opens a side pane with three lists:
+  - **Pinned**
+  - **Most used:** your top 10
+  - **Available here:** every skill you can use in this project, A to Z
+
+  Click ☆ to pin a skill, or click a name to use it. Where the app can't show a side pane, the lists open inside the panel instead.
+- `/dock pin <skill>` and `/dock unpin <skill>` pin from the prompt.
+- In the `/` menu, pinned skills say `★ pinned` and used ones say how often you used them this month.
+
+Built-in skills such as `simplify` look like ordinary commands until you use them once. After that they show up in the lists.
+
+## Where it works
+
+- **Claude desktop app, Code tab** (local sessions): everything, with native buttons and rounded progress bars.
+- **Terminal** (`claude`): everything, drawn in text. In the fullscreen layout you can click the buttons; otherwise press `ctrl+x tab` to focus the panel.
+- **VS Code extension and mobile:** Claude Code doesn't draw the panel above the prompt there, so nothing shows. The slash commands still work.
+- **Cloud sessions** run on a remote machine, so the mods would need to be installed there, not on your computer.
+
+## Develop
+
+Each mod is a folder with a manifest (`.claude-plugin/plugin.json`), a hooks module (`hooks/register.tsx`), a state contract (`types/index.d.ts`) and tests (`tests/`).
 
 ```sh
-claude --plugin-dir ~/.claude/mods/claude-mods/session-hud --plugin-dir ~/.claude/mods/claude-mods/skill-dock --plugin-dir ~/.claude/mods/claude-mods/message-queue
+for mod in session-hud message-queue skill-dock; do
+  claude plugin validate $mod && claude plugin test $mod
+done
 ```
 
-### Where it works
-
-- **Terminal** (`claude` in any terminal): everything.
-- **Desktop app, Code tab** (local sessions): everything. The buttons are native and clickable. The desktop app can't take `--plugin-dir`, so load it through `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` as above, then start a new session.
-- **VS Code extension and mobile**: not supported. Claude Code doesn't draw the band above the prompt there, so nothing shows. The `/handoff` command still runs, but its pill can't appear.
-- **Cloud sessions** run on a remote machine, so the mod has to be loaded in that environment, not on your computer.
-
-### Develop
-
-```sh
-claude plugin validate session-hud && claude plugin test session-hud
-claude plugin validate skill-dock && claude plugin test skill-dock
-claude plugin validate message-queue && claude plugin test message-queue
-```
+Load a mod with `claude --plugin-dir <folder>` while you work on it: it reloads whenever you save.

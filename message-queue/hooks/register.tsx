@@ -7,6 +7,8 @@ const messages = atom({ plugin: 'message-queue', key: 'messages' } as const, [])
 const isPaused = atom({ plugin: 'message-queue', key: 'isPaused' } as const, false)
 
 const ACCENT = '#d97757'
+// The width of the section-name column every claude-mods band shares, in cells.
+const LABEL_WIDTH = 13
 
 const local = { isWorking: false, isSending: false, nextId: 1 }
 
@@ -142,6 +144,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    // Other mods' sections come first; ours follow, nearer the prompt.
     const above = await next(e)
     if (e.props.hasSurvey) return above
 
@@ -155,50 +158,55 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         {above}
-        <Box flexDirection="column" marginTop={isDesktop && hasAbove ? 1 : 0}>
-          <Box flexDirection="row" justifyContent="space-between" gap={2}>
-            <Box flexDirection="row" gap={1}>
-              <Text bold>Queued</Text>
-              <Text dimColor>{`${list.length}`}</Text>
-            </Box>
-            {paused ? (
+        <Box flexDirection="row" gap={2} marginTop={isDesktop && hasAbove ? 1 : 0}>
+          <Box width={LABEL_WIDTH} flexShrink={0}>
+            <Text dimColor>{`Queued (${list.length})`}</Text>
+          </Box>
+          <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+            {list.map((m, index) => (
               <Box flexDirection="row" gap={1} alignItems="center">
-                <Text dimColor>Paused because you stopped Claude</Text>
+                <Box width={2} flexShrink={0}>
+                  <Text color={ACCENT}>{`${index + 1}`}</Text>
+                </Box>
+                <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                  <Text wrap="truncate-end">{firstLine(m.text)}</Text>
+                </Box>
+                <Box flexDirection="row" gap={1} width={5} flexShrink={0} justifyContent="flex-end">
+                  {index > 0 && (
+                    <Button
+                      key={`queue-up-${m.id}`}
+                      plain
+                      dimColor
+                      label="↑"
+                      onPress={() => move($, m.id, -1)}
+                    />
+                  )}
+                  <Button
+                    key={`queue-remove-${m.id}`}
+                    plain
+                    dimColor
+                    label="✕"
+                    onPress={() => update($, messages, all => all.filter(x => x.id !== m.id))}
+                  />
+                </Box>
+              </Box>
+            ))}
+            <Box flexDirection="row" gap={2} alignItems="center" paddingLeft={3}>
+              <Text dimColor>
+                {paused
+                  ? 'Paused because you stopped Claude.'
+                  : 'Sent one at a time, each after Claude finishes.'}
+              </Text>
+              {paused && (
                 <Button
                   key="queue-send"
                   variant="primary"
                   label="Send next"
                   onPress={() => sendNext($)}
                 />
-              </Box>
-            ) : (
-              <Text dimColor>sends when Claude finishes</Text>
-            )}
-          </Box>
-          {list.map((m, index) => (
-            <Box flexDirection="row" gap={1} alignItems="center">
-              <Text color={ACCENT}>{`${index + 1}`}</Text>
-              <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                <Text wrap="truncate-end">{firstLine(m.text)}</Text>
-              </Box>
-              {index > 0 && (
-                <Button
-                  key={`queue-up-${m.id}`}
-                  plain
-                  dimColor
-                  label="↑"
-                  onPress={() => move($, m.id, -1)}
-                />
               )}
-              <Button
-                key={`queue-remove-${m.id}`}
-                plain
-                dimColor
-                label="✕"
-                onPress={() => update($, messages, all => all.filter(x => x.id !== m.id))}
-              />
             </Box>
-          ))}
+          </Box>
         </Box>
       </Box>
     )

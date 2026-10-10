@@ -55,7 +55,9 @@ test('the queue key holds a message until Claude finishes, then sends it', async
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ ...band, surface })
     expect(await ui.find({ type: 'Text', text: 'then add tests for it' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'sends when Claude finishes' })).toBeDefined()
+    expect(
+      await ui.find({ type: 'Text', text: 'Sent one at a time, each after Claude finishes.' }),
+    ).toBeDefined()
     await ui.unmount()
   }
 
@@ -107,7 +109,7 @@ test('stopping Claude pauses the queue until you send the next one', async ($, o
   expect(sent).toEqual([])
 
   const ui = await $.ui.mount({ ...band, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: 'Paused because you stopped Claude' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Paused because you stopped Claude.' })).toBeDefined()
   await ui.press({ key: 'queue-send' })
   expect(sent).toEqual(['later please'])
   expect(await ui.find({ type: 'Text', text: 'later please' })).toBeUndefined()

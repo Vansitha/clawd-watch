@@ -22,26 +22,27 @@ const band = (bodyColumns = 120) => ({
   },
 })
 
-test('the 5-hour meter shows above the prompt once a reading arrives', async ($, on) => {
+test("with nothing running the band adds nothing and keeps other mods' rows", async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
-    const { Box } = $.ui.resolve(e)
-    return <Box key="engine" />
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box key="engine">
+        <Text>another mod</Text>
+      </Box>
+    )
   })
   on('session.measure', ($, e) => ({ changed: e.changed }))
   await $.session.measure({
     context: { window: 200_000, percent: 12 },
     rateLimits: [{ kind: 'five_hour', percentUsed: 42.5, resetsAt: '2026-10-03T18:00:00Z' }],
-    changed: ['rateLimits'],
+    changed: ['context', 'rateLimits'],
   })
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...band(), surface })
-    expect(await ui.find({ type: 'Text', text: '43%' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /resets/ })).toBeDefined()
-    if (surface === 'desktop') expect(await ui.find({ type: 'Svg' })).toBeDefined()
-    // What other mods drew above the prompt stays, above the meter.
-    expect(await ui.find({ key: 'engine' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'another mod' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /5-hour|43%/ })).toBeUndefined()
     await ui.unmount()
   }
 })

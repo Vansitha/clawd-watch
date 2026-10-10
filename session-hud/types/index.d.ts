@@ -1,5 +1,3 @@
-export type RateWindow = { percent: number; resetsAt?: string }
-
 export type AgentRun = {
   toolUseId: string
   agentId?: string
@@ -29,7 +27,6 @@ export type Handoff =
 declare module 'claude-code' {
   interface PluginState {
     'session-hud': {
-      fiveHour: RateWindow | null
       agents: AgentRun[]
       now: number
       handoff: Handoff | null

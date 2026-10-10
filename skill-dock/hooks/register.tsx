@@ -9,6 +9,8 @@ const skills = atom({ plugin: 'skill-dock', key: 'skills' } as const, [])
 const isInline = atom({ plugin: 'skill-dock', key: 'isInline' } as const, false)
 
 const PANE = 'skill-dock'
+// The width of the section-name column every claude-mods band shares, in cells.
+const LABEL_WIDTH = 13
 const DAY = 86_400_000
 // A use counts half as much each week it ages.
 const HALF_LIFE = 7 * DAY
@@ -35,15 +37,17 @@ export function frequent(
   at: number,
   limit: number,
 ): SkillEntry[] {
-  return list
-    .filter(s => !pinned.includes(s.name) && recentCount(used[s.name], at) > 0)
-    // Most uses in the last 30 days first; recent use breaks ties.
-    .sort(
-      (a, b) =>
-        recentCount(used[b.name], at) - recentCount(used[a.name], at) ||
-        score(used[b.name], at) - score(used[a.name], at),
-    )
-    .slice(0, limit)
+  return (
+    list
+      .filter(s => !pinned.includes(s.name) && recentCount(used[s.name], at) > 0)
+      // Most uses in the last 30 days first; recent use breaks ties.
+      .sort(
+        (a, b) =>
+          recentCount(used[b.name], at) - recentCount(used[a.name], at) ||
+          score(used[b.name], at) - score(used[a.name], at),
+      )
+      .slice(0, limit)
+  )
 }
 
 /** Which group of the list a command belongs to, or undefined when it is not a skill. */
@@ -257,8 +261,9 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const below = await next(e)
-    if (e.props.hasSurvey) return below
+    // Other mods' sections come first; ours follow, nearer the prompt.
+    const above = await next(e)
+    if (e.props.hasSurvey) return above
 
     const [pinned, used, list, inline] = await Promise.all([
       read($, pins),
@@ -270,11 +275,12 @@ export const register: Register = on => {
     const freq = frequent(list, pinned, used, at, DOCK_FREQUENT)
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
-
     const isDesktop = e.surface === 'desktop'
+    const hasAbove = ((above as { children?: unknown[] }).children?.length ?? 0) > 0
+
     // Fit as many chips as the row holds; the rest are a click away in All skills.
     const allLabel = inline ? 'Close' : `All skills (${list.length}) ›`
-    let room = e.props.bodyColumns - 'Skills'.length - allLabel.length - 8
+    let room = e.props.bodyColumns - LABEL_WIDTH - allLabel.length - 8
     const fits = (label: string) => {
       const width = label.length + 5
       if (width > room) return false
@@ -289,56 +295,58 @@ export const register: Register = on => {
       .map(s => ({ name: s.name, label: short(s.name) }))
       .filter(c => fits(c.label))
 
-    const pinChips = pinLabels.map(c => (
-      <Button key={`dock-pin-${c.name}`} label={c.label} onPress={() => insertSkill($, c.name)} />
-    ))
-    const freqChips = freqLabels.map(c => (
-      <Button
-        key={`dock-freq-${c.name}`}
-        dimColor
-        label={c.label}
-        onPress={() => insertSkill($, c.name)}
-      />
-    ))
-    // Leave a row between the dock and the next mod's rows, when there are any.
-    const hasBelow = ((below as { children?: unknown[] }).children?.length ?? 0) > 0
-
     return (
       <Box flexDirection="column">
+        {above}
         <Box
           flexDirection="row"
-          justifyContent="space-between"
-          alignItems="center"
           gap={2}
-          marginBottom={isDesktop && (hasBelow || inline) ? 1 : 0}
+          alignItems={inline ? 'flex-start' : 'center'}
+          marginTop={isDesktop && hasAbove ? 1 : 0}
         >
-          <Box flexDirection="row" gap={1} alignItems="center" flexShrink={1} overflow="hidden">
-            <Text bold dimColor>
-              Skills
-            </Text>
-            {pinChips.length + freqChips.length === 0 && (
-              <Text dimColor italic>
-                Pin or use a skill and it appears here
-              </Text>
+          <Box width={LABEL_WIDTH} flexShrink={0}>
+            <Text dimColor>Skills</Text>
+          </Box>
+          <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+            <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
+              <Box flexDirection="row" gap={1} alignItems="center" flexShrink={1} overflow="hidden">
+                {pinLabels.length + freqLabels.length === 0 && (
+                  <Text dimColor>Pin or use a skill and it shows up here</Text>
+                )}
+                {pinLabels.map(c => (
+                  <Button
+                    key={`dock-pin-${c.name}`}
+                    label={c.label}
+                    onPress={() => insertSkill($, c.name)}
+                  />
+                ))}
+                {pinLabels.length > 0 && freqLabels.length > 0 && <Text dimColor>│</Text>}
+                {freqLabels.map(c => (
+                  <Button
+                    key={`dock-freq-${c.name}`}
+                    dimColor
+                    label={c.label}
+                    onPress={() => insertSkill($, c.name)}
+                  />
+                ))}
+              </Box>
+              <Box flexShrink={0}>
+                <Button
+                  key="dock-all"
+                  plain
+                  dimColor
+                  label={allLabel}
+                  onPress={() => (inline ? update($, isInline, () => false) : openAll($))}
+                />
+              </Box>
+            </Box>
+            {inline && (
+              <Box flexDirection="column" marginTop={isDesktop ? 1 : 0}>
+                {skillList($, t, { list, pinned, used, at })}
+              </Box>
             )}
-            {pinChips}
-            {pinChips.length > 0 && freqChips.length > 0 && <Text dimColor>│</Text>}
-            {freqChips}
           </Box>
-          <Button
-            key="dock-all"
-            plain
-            dimColor
-            label={allLabel}
-            onPress={() => (inline ? update($, isInline, () => false) : openAll($))}
-          />
         </Box>
-        {inline && (
-          <Box flexDirection="column" marginBottom={isDesktop && hasBelow ? 1 : 0}>
-            {skillList($, t, { list, pinned, used, at })}
-          </Box>
-        )}
-        {below}
       </Box>
     )
   })

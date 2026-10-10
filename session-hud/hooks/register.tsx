@@ -1,9 +1,8 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface, SessionRateLimit } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
 import type { AgentRun, Handoff } from '../types'
 
-const fiveHour = atom({ plugin: 'session-hud', key: 'fiveHour' } as const, null)
 const agents = atom({ plugin: 'session-hud', key: 'agents' } as const, [])
 const now = atom({ plugin: 'session-hud', key: 'now' } as const, 0)
 const handoff = atom({ plugin: 'session-hud', key: 'handoff' } as const, null)
@@ -31,9 +30,10 @@ const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 // Colors that read on both light and dark backgrounds.
 const ACCENT = '#d97757'
 const SUCCESS = '#5fa865'
-const WARNING = '#d9a03f'
 const ERROR = '#d9534f'
-const NEUTRAL = '#8f98a3'
+
+// The width of the section-name column every claude-mods band shares, in cells.
+const LABEL_WIDTH = 13
 
 type Sample = { type: string; ms: number; steps: number }
 
@@ -236,13 +236,6 @@ async function finish(
   }
 }
 
-async function saveRate($: EngineInterface, limits: readonly SessionRateLimit[]) {
-  const window = limits.find(limit => limit.kind === 'five_hour')
-  await update($, fiveHour, () =>
-    window ? { percent: window.percentUsed, resetsAt: window.resetsAt } : null,
-  )
-}
-
 async function tick($: EngineInterface) {
   const at = await $.clock.now()
   const isLive = (await read($, agents)).some(run => isShown(run, at))
@@ -339,17 +332,14 @@ export const register: Register = on => {
       .catch(() => undefined)
 
     const usage = await $.session.usage().catch(() => undefined)
-    if (usage) {
-      local.contextPercent = usage.context.percent ?? 0
-      await saveRate($, usage.rateLimits)
-    }
+    local.contextPercent = usage?.context.percent ?? 0
 
     return result
   })
 
   on('session.measure', async ($, e, next) => {
+    // How full the context is decides how soon to suggest a fresh session.
     local.contextPercent = e.context.percent ?? local.contextPercent
-    if (e.changed.includes('rateLimits')) await saveRate($, e.rateLimits)
 
     return next(e)
   })
@@ -482,12 +472,11 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Other mods' rows (the skill dock) go above ours.
+    // Other mods' sections come first; ours follow, nearer the prompt.
     const above = await next(e)
     if (e.props.hasSurvey) return above
 
-    const [rate, list, pending] = await Promise.all([
-      read($, fiveHour),
+    const [list, pending] = await Promise.all([
       read($, agents),
       read($, handoff),
       // Read so the ticker's writes redraw the band while agents run.
@@ -496,14 +485,28 @@ export const register: Register = on => {
     const at = await $.clock.now()
     const shown = list.filter(run => isShown(run, at))
 
-    if (!rate && shown.length === 0 && !pending) return above
+    if (shown.length === 0 && !pending) return above
 
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const isDesktop = e.surface === 'desktop'
     const cols = Math.max(30, e.props.bodyColumns)
-    const barCells = clamp(Math.floor(cols / 6), 10, 22)
+    const barCells = clamp(Math.floor((cols - LABEL_WIDTH) / 6), 10, 20)
+    const hasAbove = ((above as { children?: unknown[] }).children?.length ?? 0) > 0
     const sections: JSX.Element[] = []
+
+    // Every section: its name in a fixed column on the left, its content beside it.
+    // A one-line section with buttons centres its name on them; a list keeps it on the first line.
+    const section = (label: string, content: JSX.Element, isOneLine = false) => (
+      <Box flexDirection="row" gap={2} alignItems={isOneLine ? 'center' : 'flex-start'}>
+        <Box width={LABEL_WIDTH} flexShrink={0}>
+          <Text dimColor>{label}</Text>
+        </Box>
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          {content}
+        </Box>
+      </Box>
+    )
 
     // A rounded SVG bar where the surface draws SVG, a run of blocks in the terminal.
     const meter = (key: string, fraction: number, fill: string, label: string) => {
@@ -537,17 +540,14 @@ export const register: Register = on => {
       const left = Math.max(0, ...shown.map(run => estimate(run, at).remaining))
       const spin = SPINNER[Math.floor(at / 1000) % SPINNER.length]
       const rows: JSX.Element[] = [
-        <Box flexDirection="row" justifyContent="space-between" gap={2}>
-          <Text bold>Subagents</Text>
-          {running.length > 0 ? (
-            <Box flexDirection="row" gap={1}>
-              <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
-              <Text dimColor>{`·  in ~${duration(left)}`}</Text>
-            </Box>
-          ) : (
-            <Text color={SUCCESS}>All done</Text>
-          )}
-        </Box>,
+        running.length > 0 ? (
+          <Box flexDirection="row" gap={1}>
+            <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
+            <Text dimColor>{`·  in ~${duration(left)}`}</Text>
+          </Box>
+        ) : (
+          <Text color={SUCCESS}>All done</Text>
+        ),
       ]
 
       shown.slice(-Math.max(1, Math.floor((e.props.maxRows - 3) / 2))).forEach(run => {
@@ -588,7 +588,7 @@ export const register: Register = on => {
                   `about ${Math.round(progress * 100)}% done`,
                 )}
                 <Box flexShrink={1} minWidth={0}>
-                  <Text dimColor italic wrap="truncate-end">
+                  <Text dimColor wrap="truncate-end">
                     {run.activity}
                   </Text>
                 </Box>
@@ -598,90 +598,73 @@ export const register: Register = on => {
         )
       })
 
-      sections.push(<Box flexDirection="column">{rows}</Box>)
+      sections.push(section('Subagents', <Box flexDirection="column">{rows}</Box>))
     }
 
     if (pending?.phase === 'writing') {
-      sections.push(
-        <Box flexDirection="row" gap={1}>
-          <Text color={ACCENT}>◌</Text>
-          <Text dimColor>Writing handoff prompt…</Text>
-        </Box>,
-      )
+      sections.push(section('Next session', <Text dimColor>Writing the handoff prompt…</Text>))
     }
 
     if (pending?.phase === 'ready') {
       sections.push(
-        <Box
-          key="handoff"
-          flexDirection="row"
-          justifyContent="space-between"
-          gap={2}
-          alignItems="center"
-        >
-          <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
-            <Text color={ACCENT}>{pending.source === 'auto' ? '✦' : '⇢'}</Text>
-            <Text bold wrap="truncate-end">
-              {pending.title}
-            </Text>
-            {pending.reason !== '' && (
-              <Text dimColor wrap="truncate-end">
-                {pending.reason}
+        section(
+          pending.source === 'auto' ? 'Suggested' : 'Next session',
+          <Box
+            key="handoff"
+            flexDirection="row"
+            justifyContent="space-between"
+            gap={2}
+            alignItems="center"
+          >
+            <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
+              <Text bold wrap="truncate-end">
+                {pending.title}
               </Text>
-            )}
-          </Box>
-          <Box flexDirection="row" gap={1}>
-            <Button
-              key="handoff-start"
-              variant="primary"
-              hotkey="s"
-              label="Start fresh session"
-              onPress={press => startFresh($, pending, press.surface)}
-            />
-            <Button
-              key="handoff-copy"
-              dimColor
-              hotkey="c"
-              label="Copy"
-              onPress={async press => {
-                const copied = await $.ui.copy({ text: pending.prompt, surface: press.surface })
-                $.ui.toast(copied.isCopied ? 'Handoff copied.' : 'Could not reach the clipboard.')
-              }}
-            />
-            <Button
-              key="handoff-dismiss"
-              role="dismiss"
-              dimColor
-              hotkey="x"
-              label="Dismiss"
-              onPress={() => update($, handoff, () => null)}
-            />
-          </Box>
-        </Box>,
-      )
-    }
-
-    if (rate) {
-      const percent = Math.round(rate.percent)
-      const tone = rate.percent >= 90 ? ERROR : rate.percent >= 70 ? WARNING : NEUTRAL
-      const resets = rate.resetsAt ? Date.parse(rate.resetsAt) : NaN
-
-      sections.push(
-        <Box flexDirection="row" gap={1} alignItems="center">
-          <Text dimColor>5-hour limit</Text>
-          {meter('usage-bar', rate.percent / 100, tone, `${percent}% of the 5-hour limit used`)}
-          <Text color={rate.percent >= 70 ? tone : undefined} dimColor={rate.percent < 70}>
-            {`${percent}%`}
-          </Text>
-          {!Number.isNaN(resets) && <Text dimColor>{`·  resets ${clockTime(resets)}`}</Text>}
-        </Box>,
+              {pending.reason !== '' && (
+                <Text dimColor wrap="truncate-end">
+                  {`·  ${pending.reason}`}
+                </Text>
+              )}
+            </Box>
+            <Box flexDirection="row" gap={1} flexShrink={0}>
+              <Button
+                key="handoff-start"
+                variant="primary"
+                hotkey="s"
+                label="Start fresh session"
+                onPress={press => startFresh($, pending, press.surface)}
+              />
+              <Button
+                key="handoff-copy"
+                hotkey="c"
+                label="Copy"
+                onPress={async press => {
+                  const copied = await $.ui.copy({ text: pending.prompt, surface: press.surface })
+                  $.ui.toast(copied.isCopied ? 'Handoff copied.' : 'Could not reach the clipboard.')
+                }}
+              />
+              <Button
+                key="handoff-dismiss"
+                role="dismiss"
+                hotkey="x"
+                label="Dismiss"
+                onPress={() => update($, handoff, () => null)}
+              />
+            </Box>
+          </Box>,
+          true,
+        ),
       )
     }
 
     return (
       <Box flexDirection="column">
         {above}
-        <Box flexDirection="column" gap={isDesktop ? 1 : 0}>
+        <Box
+          flexDirection="column"
+          gap={isDesktop ? 1 : 0}
+          marginTop={isDesktop && hasAbove ? 1 : 0}
+        >
           {sections}
         </Box>
       </Box>
