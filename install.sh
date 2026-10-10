@@ -166,7 +166,12 @@ open(file, "w").write(json.dumps(settings, indent=2) + "\n")
 '
 
 mkdir -p "$(dirname "$SETTINGS")"
-[ -f "$SETTINGS" ] && cp "$SETTINGS" "$SETTINGS.bak"
+# settings.json can hold secrets (API keys in env): the backup keeps its permissions, and an
+# older backup is replaced rather than overwritten in place, which would keep the old file's.
+if [ -f "$SETTINGS" ]; then
+  rm -f "$SETTINGS.bak"
+  cp -p "$SETTINGS" "$SETTINGS.bak"
+fi
 
 if command -v node >/dev/null 2>&1; then
   node -e "$edit_js" "$SETTINGS" "$mode" "$paths" "$show_in" "$MODS" || fail "settings.json was not changed."
