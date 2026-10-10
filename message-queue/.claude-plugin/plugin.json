@@ -1,0 +1,7 @@
+{
+  "name": "message-queue",
+  "version": "0.1.0",
+  "description": "Queue messages while Claude works: they wait above the prompt and are sent one at a time once Claude finishes, instead of steering the running task.",
+  "author": { "name": "Vansitha" },
+  "types": "./types/index.d.ts"
+}

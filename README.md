@@ -48,6 +48,39 @@ Skills  [★ code-review] [★ pdf]  │  [simplify] [xlsx] [dataviz]           
 
 skill-dock and session-hud work together: the dock row sits above the subagent rows and the usage meter.
 
+## message-queue
+
+Queue a message for Claude to read **after** it finishes what it's doing, instead of steering the running task.
+
+```
+Queued  2                                          sends when Claude finishes
+1  Then add tests for the rooms screen and run them                         ✕
+2  Update the README with the new crew and seats flow                     ↑ ✕
+```
+
+- **Enter** works as always: a message typed while Claude works steers the current task.
+- **The queue key** (Claude Code's `chat:queueSubmit`, `ctrl+x enter` by default) holds the message instead. It waits above the prompt and goes to Claude as your next message once the current task ends.
+- **`/queue <message>`** does the same from the prompt, and works anywhere, the desktop app included. `/queue clear` empties the queue.
+- Queued messages go one at a time, in order. Each waits for the previous task to finish. Use ↑ to move one up, ✕ to remove it.
+- If you stop Claude (Esc), the queue pauses so it doesn't start the next task behind your back. Press **Send next** when you're ready.
+- Messages with images can't be queued; they're sent right away.
+
+### Queue with Shift+Enter
+
+Add this to `~/.claude/keybindings.json` (merge it with what's there):
+
+```json
+{
+  "$schema": "https://www.schemastore.org/claude-code-keybindings.json",
+  "$docs": "https://code.claude.com/docs/en/keybindings",
+  "bindings": [
+    { "context": "Chat", "bindings": { "shift+enter": "chat:queueSubmit" } }
+  ]
+}
+```
+
+Shift+Enter then queues instead of starting a new line; `ctrl+j` still adds a new line. Some terminals send Shift+Enter as a plain Enter: run `/terminal-setup` once if it doesn't work.
+
 ## Install
 
 On macOS or Linux, run:
@@ -57,12 +90,12 @@ git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
 ~/.claude/mods/claude-mods/install.sh
 ```
 
-Then quit and reopen the desktop app, or start a new `claude` session. The installer adds both mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, keeping everything else there, and saves the old file as `settings.json.bak`. Run `install.sh` again to update.
+Then quit and reopen the desktop app, or start a new `claude` session. The installer adds all three mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, keeping everything else there, and saves the old file as `settings.json.bak`. Run `install.sh` again to update.
 
 To load them for one session only instead:
 
 ```sh
-claude --plugin-dir ~/.claude/mods/claude-mods/session-hud --plugin-dir ~/.claude/mods/claude-mods/skill-dock
+claude --plugin-dir ~/.claude/mods/claude-mods/session-hud --plugin-dir ~/.claude/mods/claude-mods/skill-dock --plugin-dir ~/.claude/mods/claude-mods/message-queue
 ```
 
 ### Where it works
@@ -77,4 +110,5 @@ claude --plugin-dir ~/.claude/mods/claude-mods/session-hud --plugin-dir ~/.claud
 ```sh
 claude plugin validate session-hud && claude plugin test session-hud
 claude plugin validate skill-dock && claude plugin test skill-dock
+claude plugin validate message-queue && claude plugin test message-queue
 ```
