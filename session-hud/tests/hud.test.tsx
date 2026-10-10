@@ -95,6 +95,7 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
   const clock = mock.clock(on, { now: 2_000_000 })
   mock.store(on)
   on('agent.spawn', () => ({ model: 'm', agentId: 'agent-1' }))
+  on('agent.list', () => ({ value: [] }))
   on('turn.complete', () => ({ text: '' }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Box } = $.ui.resolve(e)
@@ -173,6 +174,7 @@ test(
   async ($, on) => {
     mock.clock(on, { now: 2_000_000 })
     mock.store(on)
+    on('session.surfaces', () => ({ value: ['desktop' as const] }))
     on('agent.spawn', () => ({ model: 'm', agentId: 'agent-1' }))
     on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
       const { Box } = $.ui.resolve(e)
@@ -198,3 +200,64 @@ test(
     await desktop.unmount()
   },
 )
+
+test('a background subagent that ends unseen is marked done from the agent list', async ($, on) => {
+  const clock = mock.clock(on, { now: 2_000_000 })
+  mock.store(on)
+  let status = 'running'
+  on('agent.spawn', () => ({ model: 'm', agentId: 'agent-1' }))
+  on('agent.list', () => ({
+    value: [{ id: 'agent-1', description: 'd', type: 'Explore', status }],
+  }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box key="engine" />
+  })
+  await $.agent.spawn({
+    tool_use_id: 'toolu_1',
+    prompt: 'p',
+    description: 'Find auth handlers',
+    subagentType: 'Explore',
+    provider: { plugin: 'engine', tier: 'core' },
+    parentModel: 'm',
+    background: true,
+    fork: false,
+  })
+
+  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+  await clock.advance(10_000)
+  expect(await ui.find({ type: 'Text', text: /^All done by ~/ })).toBeDefined()
+
+  status = 'completed'
+  await clock.advance(10_000)
+  expect(await ui.find({ type: 'Text', text: 'All done' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a spawn that fails leaves no row behind', async ($, on) => {
+  mock.clock(on, { now: 2_000_000 })
+  mock.store(on)
+  on('agent.spawn', () => {
+    throw new Error('refused')
+  })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box key="engine" />
+  })
+  await $.agent
+    .spawn({
+      tool_use_id: 'toolu_1',
+      prompt: 'p',
+      description: 'Find auth handlers',
+      subagentType: 'Explore',
+      provider: { plugin: 'engine', tier: 'core' },
+      parentModel: 'm',
+      background: false,
+      fork: false,
+    })
+    .catch(() => undefined)
+
+  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: 'Subagents' })).toBeUndefined()
+  await ui.unmount()
+})

@@ -15,10 +15,15 @@ const band = {
 }
 
 /** The engine beneath the plugin: records what reaches the model, draws an empty band. */
-function engine(on: On) {
+function engine(on: On, { failSubmit = false } = {}) {
   const sent: string[] = []
   const clock = mock.clock(on, { now: 1_000_000 })
-  on('prompt.submit', ($, e) => (sent.push(e.text), { text: e.text }))
+  on('prompt.submit', ($, e) => {
+    // A plugin's own submit (queued messages) fails when asked; the person's typing never does.
+    if (failSubmit && e.origin.kind === 'plugin') throw new Error('refused')
+    sent.push(e.text)
+    return { text: e.text }
+  })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
@@ -130,5 +135,35 @@ test('/queue adds a message while Claude works', async ($, on) => {
 
   const ui = await $.ui.mount({ ...band, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: 'write the changelog after' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('emptying a paused queue un-pauses it, so later messages still go', async ($, on) => {
+  const { sent, clock } = engine(on)
+  await $.turn.start({ text: 'build it', turnId: 't1' })
+  await $.prompt.submit(typed('first', true))
+  await $.turn.complete(finished('aborted'))
+
+  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  const remove = await ui.find({ type: 'Button', text: '✕' })
+  await ui.press({ key: remove!.key! })
+  await ui.unmount()
+
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  await $.prompt.submit({ ...typed('second', true), turnId: 't2' })
+  await $.turn.complete({ ...finished('answer'), turnId: 't2' })
+  await clock.advance(300)
+  expect(sent).toEqual(['second'])
+})
+
+test('a message that fails to send goes back to the front of the queue', async ($, on) => {
+  const { clock } = engine(on, { failSubmit: true })
+  await $.turn.start({ text: 'build it', turnId: 't1' })
+  await $.prompt.submit(typed('keep me', true))
+  await $.turn.complete(finished('answer'))
+  await clock.advance(300)
+
+  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: 'keep me' })).toBeDefined()
   await ui.unmount()
 })

@@ -23,7 +23,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --uninstall) mode="uninstall" ;;
     --only)
-      show_in="${2:-}"
+      [ $# -ge 2 ] || {
+        echo "--only takes desktop, terminal or both" >&2
+        exit 2
+      }
+      show_in="$2"
       shift
       ;;
     --only=*) show_in="${1#--only=}" ;;
@@ -109,18 +113,20 @@ const fs = require("fs");
 const [file, mode, given, showIn, names] = process.argv.slice(1);
 let settings = {};
 try {
-  settings = JSON.parse(fs.readFileSync(file, "utf8"));
+  const text = fs.readFileSync(file, "utf8");
+  settings = text.trim() ? JSON.parse(text) : {};
 } catch (e) {
   if (e.code !== "ENOENT") { console.error(file + " is not valid JSON, so it was left alone."); process.exit(3); }
 }
 settings.env = settings.env || {};
 let list = (settings.env.CLAUDE_CODE_PLUGIN_DIRS || "").split(":").filter(Boolean);
 const paths = given.split(":");
-// Another copy of one of these mods (an install made before the project was renamed) would
-// load the same mod twice: drop it, keeping the paths being installed.
+// Any copy of these mods: from this clone, another clone, or an install before the rename.
+// Install keeps only the copies in this clone, so each mod loads once; uninstall removes all.
 const mods = names.split(" ");
-const isOtherCopy = p => !paths.includes(p) && mods.includes(p.split("/").pop());
-list = mode === "install" ? [...list.filter(p => !isOtherCopy(p)), ...paths.filter(p => !list.includes(p))] : list.filter(p => !paths.includes(p));
+const isCopy = p => mods.includes(p.replace(/\/+$/, "").split("/").pop());
+list = list.filter(p => !isCopy(p));
+if (mode === "install") list.push(...paths);
 if (list.length) settings.env.CLAUDE_CODE_PLUGIN_DIRS = list.join(":");
 else delete settings.env.CLAUDE_CODE_PLUGIN_DIRS;
 if (!Object.keys(settings.env).length) delete settings.env;
@@ -138,7 +144,7 @@ edit_py='
 import json, os, sys
 file, mode, given, show_in, names = sys.argv[1:6]
 settings = {}
-if os.path.exists(file) and os.path.getsize(file):
+if os.path.exists(file) and open(file).read().strip():
     try:
         settings = json.load(open(file))
     except ValueError:
@@ -147,12 +153,12 @@ if os.path.exists(file) and os.path.getsize(file):
 env = settings.setdefault("env", {})
 items = [p for p in env.get("CLAUDE_CODE_PLUGIN_DIRS", "").split(":") if p]
 paths = given.split(":")
-# Another copy of one of these mods (an install made before the project was renamed) would
-# load the same mod twice: drop it, keeping the paths being installed.
+# Any copy of these mods: from this clone, another clone, or an install before the rename.
+# Install keeps only the copies in this clone, so each mod loads once; uninstall removes all.
 mods = names.split()
-def other_copy(p):
-    return p not in paths and p.rstrip("/").split("/")[-1] in mods
-items = [p for p in items if not other_copy(p)] + [p for p in paths if p not in items] if mode == "install" else [p for p in items if p not in paths]
+items = [p for p in items if p.rstrip("/").split("/")[-1] not in mods]
+if mode == "install":
+    items += paths
 if items:
     env["CLAUDE_CODE_PLUGIN_DIRS"] = ":".join(items)
 else:

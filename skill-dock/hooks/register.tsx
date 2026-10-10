@@ -1,5 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { CommandInfo, ElementTable, EngineInterface, Register } from 'claude-code'
+import type {
+  CommandInfo,
+  ElementTable,
+  EngineInterface,
+  Register,
+  RenderSurface,
+} from 'claude-code'
 
 import type { SkillEntry, Uses } from '../types'
 
@@ -16,9 +22,6 @@ const NARROW_COLUMNS = 72
 // The "ctrl+x tab" hint's key: the first mod in the band to draw it shows it, the rest see it.
 const HINT_KEY = 'overwatch-hint'
 
-// isActive is false in a session on a surface the "Show in" setting leaves out.
-const local = { isActive: true }
-
 /** Whether a drawn tree already holds an element with this key. */
 function hasKey(node: unknown, key: string): boolean {
   if (!node || typeof node !== 'object') return false
@@ -27,14 +30,21 @@ function hasKey(node: unknown, key: string): boolean {
   return element.props?.key === key || (element.children ?? []).some(c => hasKey(c, key))
 }
 
-/** Whether the mod runs on a surface, by its "Show in" setting: both, desktop or terminal. */
-export function runsOn(showIn: string, surface: string | null | undefined): boolean {
-  if (showIn === 'desktop')
-    return surface !== 'terminal' && surface !== null && surface !== undefined
-  if (showIn === 'terminal')
-    return surface === 'terminal' || surface === null || surface === undefined
+/** Whether the "Show in" setting (both, desktop or terminal) includes a surface. */
+export function runsOn(showIn: string, surface: RenderSurface): boolean {
+  if (showIn === 'desktop') return surface !== 'terminal'
+  if (showIn === 'terminal') return surface === 'terminal'
 
   return true
+}
+
+/** Whether the mod runs in this session, judged by the surfaces drawing it right now. */
+async function isActive($: EngineInterface, showIn: string): Promise<boolean> {
+  if (showIn === 'both') return true
+  const surfaces = await $.session.surfaces()
+
+  // Until a client attaches (the desktop app, the SDK) nothing rules the mod out.
+  return surfaces.length === 0 || surfaces.some(surface => runsOn(showIn, surface))
 }
 const DAY = 86_400_000
 // A use counts half as much each week it ages.
@@ -237,18 +247,13 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    local.isActive = runsOn(showIn, e.surface)
-    // Usage is still counted on a surface the dock isn't shown on, so it's right where it is.
-    if (!local.isActive) {
-      await loadSaved($)
-      return result
-    }
-
-    await $.command.register({
-      name: 'dock',
-      description: 'Show all your skills; pin favourites to the dock above the prompt',
-      argumentHint: '[pin <skill> | unpin <skill>]',
-    })
+    await $.command
+      .register({
+        name: 'dock',
+        description: 'Show all your skills; pin favourites to the dock above the prompt',
+        argumentHint: '[pin <skill> | unpin <skill>]',
+      })
+      .catch(() => undefined)
     await loadSaved($)
     await refreshSkills($)
 
@@ -263,6 +268,9 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'dock' }, async ($, e) => {
+    if (!(await isActive($, showIn))) {
+      return { text: `skill-dock is set to show in the ${showIn} only. Change it under /config.` }
+    }
     const [verb, name] = (e.args ?? '').trim().split(/\s+/)
 
     if ((verb === 'pin' || verb === 'unpin') && name) {
@@ -280,7 +288,7 @@ export const register: Register = (on, options) => {
 
   on('command.describe', async ($, e, next) => {
     const result = await next(e)
-    if (!local.isActive) return result
+    if (!(await isActive($, showIn))) return result
     const at = await $.clock.now()
     const count = recentCount((await read($, uses))[e.command], at)
 

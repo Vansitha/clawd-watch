@@ -38,12 +38,15 @@ const band = {
 }
 
 /** The engine beneath the plugin: its commands, prompt box, panes and an empty band. */
-function engine(on: On, store: Record<string, unknown> = {}, isPlaced = true) {
+function engine(on: On, store: Record<string, unknown> = {}, isPlaced = true, canRegister = true) {
   const filled: string[] = []
   const clock = mock.clock(on, { now: NOW })
   mock.store(on, store)
   on('command.list', () => ({ value: COMMANDS }))
-  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('command.register', ($, e) => {
+    if (!canRegister) throw new Error('/dock is taken')
+    return { value: { command: e.name } }
+  })
   on('session.start', () => ({ cwd: '/work' }))
   on('prompt.read', () => ({ value: { text: 'for the Q3 report', cursor: 0 } }))
   on('prompt.fill', ($, e) => (filled.push(e.text), { isFilled: true }))
@@ -197,3 +200,12 @@ test(
     await terminal.unmount()
   },
 )
+
+test('pins still load when /dock cannot be registered', async ($, on) => {
+  engine(on, { pins: ['simplify'], knownSkills: ['simplify'] }, true, false)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  expect(await ui.find({ key: 'dock-pin-simplify' })).toBeDefined()
+  await ui.unmount()
+})

@@ -48,7 +48,7 @@ test(
   { options: { show_in: 'desktop' } },
   async ($, on) => {
     const sent = engine(on)
-    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    on('session.surfaces', () => ({ value: ['terminal' as const] }))
     await $.turn.start({ text: 'build it', turnId: 't1' })
 
     const result = await $.prompt.submit({
@@ -112,3 +112,22 @@ test("another mod's hint means no second one", async ($, on) => {
   expect((await ui.findAll({ type: 'Text', text: 'ctrl+x tab' })).length).toBe(1)
   await ui.unmount()
 })
+
+test(
+  'set to terminal, the desktop app is unaffected, and a desktop client turns it on',
+  { options: { show_in: 'terminal' } },
+  async ($, on) => {
+    const sent = engine(on)
+    let surfaces: ('terminal' | 'desktop')[] = ['desktop']
+    on('session.surfaces', () => ({ value: surfaces }))
+    await $.turn.start({ text: 'build it', turnId: 't1' })
+
+    const typed = { wait: true, turnId: 't1', origin: { kind: 'composer' as const } }
+    expect((await $.prompt.submit({ ...typed, text: 'now' })).drop).toBeUndefined()
+    expect(sent).toEqual(['now'])
+
+    surfaces = ['terminal', 'desktop']
+    expect((await $.prompt.submit({ ...typed, text: 'later' })).drop).toBeDefined()
+    expect(sent).toEqual(['now'])
+  },
+)

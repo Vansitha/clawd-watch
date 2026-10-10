@@ -13,6 +13,8 @@ const LINGER_MS = 8000
 const HISTORY_SIZE = 60
 // An auto suggestion goes stale after this many further turns.
 const STALE_TURNS = 3
+// How often, in once-a-second ticks, to check running subagents against the engine's list.
+const RECONCILE_EVERY_TICKS = 10
 
 // What a subagent of each type takes before the mod has seen any finish.
 const DEFAULT_MS: Record<string, number> = {
@@ -47,14 +49,21 @@ function hasKey(node: unknown, key: string): boolean {
   return element.props?.key === key || (element.children ?? []).some(c => hasKey(c, key))
 }
 
-/** Whether the mod runs on a surface, by its "Show in" setting: both, desktop or terminal. */
-export function runsOn(showIn: string, surface: string | null | undefined): boolean {
-  if (showIn === 'desktop')
-    return surface !== 'terminal' && surface !== null && surface !== undefined
-  if (showIn === 'terminal')
-    return surface === 'terminal' || surface === null || surface === undefined
+/** Whether the "Show in" setting (both, desktop or terminal) includes a surface. */
+export function runsOn(showIn: string, surface: RenderSurface): boolean {
+  if (showIn === 'desktop') return surface !== 'terminal'
+  if (showIn === 'terminal') return surface === 'terminal'
 
   return true
+}
+
+/** Whether the mod runs in this session, judged by the surfaces drawing it right now. */
+async function isActive($: EngineInterface, showIn: string): Promise<boolean> {
+  if (showIn === 'both') return true
+  const surfaces = await $.session.surfaces()
+
+  // Until a client attaches (the desktop app, the SDK) nothing rules the mod out.
+  return surfaces.length === 0 || surfaces.some(surface => runsOn(showIn, surface))
 }
 
 type Sample = { type: string; ms: number; steps: number }
@@ -206,8 +215,7 @@ const local = {
   isChecking: false,
   wasLive: false,
   isTicking: false,
-  // False in a session on a surface the "Show in" setting leaves out.
-  isActive: true,
+  ticks: 0,
 }
 
 /** Starts the once-a-second redraw that keeps elapsed times and ETAs moving. */
@@ -262,9 +270,27 @@ async function finish(
 
 async function tick($: EngineInterface) {
   const at = await $.clock.now()
-  const isLive = (await read($, agents)).some(run => isShown(run, at))
+  const list = await read($, agents)
+  const isLive = list.some(run => isShown(run, at))
   if (isLive || local.wasLive) await update($, now, () => at)
   local.wasLive = isLive
+
+  local.ticks += 1
+  if (local.ticks % RECONCILE_EVERY_TICKS === 0) await reconcile($, list)
+}
+
+/** Ends rows whose subagent the engine says has stopped, should its last turn have gone unseen. */
+async function reconcile($: EngineInterface, list: readonly AgentRun[]) {
+  const watched = list.filter(run => run.status === 'running' && run.agentId !== undefined)
+  if (watched.length === 0) return
+
+  const infos = await $.agent.list().catch(() => [])
+  const statusById = new Map(infos.map(info => [info.id, info.status]))
+  for (const run of watched) {
+    const status = statusById.get(run.agentId!)
+    if (status === undefined || status === 'running') continue
+    await finish($, one => one.agentId === run.agentId, status === 'completed' ? 'done' : 'failed')
+  }
 }
 
 async function writeHandoff($: EngineInterface, focus: string) {
@@ -345,8 +371,6 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    local.isActive = runsOn(showIn, e.surface)
-    if (!local.isActive) return result
     startTicker($)
 
     // Each step stands alone, so one that fails doesn't stop the others.
@@ -366,7 +390,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.measure', async ($, e, next) => {
-    if (!local.isActive) return next(e)
+    if (!(await isActive($, showIn))) return next(e)
     // How full the context is decides how soon to suggest a fresh session.
     local.contextPercent = e.context.percent ?? local.contextPercent
 
@@ -385,6 +409,9 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'handoff' }, async ($, e) => {
+    if (!(await isActive($, showIn))) {
+      return { text: `session-hud is set to show in the ${showIn} only. Change it under /config.` }
+    }
     const args = (e.args ?? '').trim()
     const toggle = /^auto\s+(on|off)$/i.exec(args)
 
@@ -405,7 +432,7 @@ export const register: Register = (on, options) => {
   })
 
   on('agent.spawn', async ($, e, next) => {
-    if (!local.isActive) return next(e)
+    if (!(await isActive($, showIn))) return next(e)
     startTicker($)
     const at = await $.clock.now()
     const run: AgentRun = {
@@ -423,7 +450,14 @@ export const register: Register = (on, options) => {
     await update($, agents, list => [...list.filter(one => isShown(one, at)), run].slice(-12))
     await update($, now, () => at)
 
-    const result = await next(e)
+    let result: Awaited<ReturnType<typeof next>>
+    try {
+      result = await next(e)
+    } catch (error) {
+      // No subagent started: don't leave a row spinning for the rest of the session.
+      await update($, agents, list => list.filter(one => one.toolUseId !== run.toolUseId))
+      throw error
+    }
 
     await update($, agents, list =>
       result.deny !== undefined
@@ -437,7 +471,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', async ($, e, next) => {
-    if (!local.isActive) return next(e)
+    if (!(await isActive($, showIn))) return next(e)
     const agentId = e.agentId
 
     if (agentId !== undefined) {
@@ -471,7 +505,7 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (!local.isActive) return next(e)
+    if (!(await isActive($, showIn))) return next(e)
     const result = await next(e)
     const agentId = e.agentId
 
