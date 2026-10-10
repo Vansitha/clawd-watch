@@ -14,7 +14,7 @@ Install Clawd Watch for me: clone https://github.com/Vansitha/clawd-watch into ~
 - **Errors:** if a step fails, stop and show the person the exact output. Don't work around it by hand-editing files the installer refused to touch, such as a `settings.json` that isn't valid JSON.
 - **Permissions:** don't use `sudo`. Everything lives in the person's home folder.
 - **Before installing:** ask where the mods should run: the desktop app and the terminal, the desktop app only, or the terminal only. Pass the answer to the installer as `--only both`, `--only desktop` or `--only terminal`.
-- **Optional step:** ask before step 5 (the Shift+Enter key). It changes what a key does.
+- **Optional step:** ask before step 5 (the Shift+Cmd+Enter key). It adds a key binding.
 - **Reporting:** when you're done, say what was installed, where, and what the person needs to do next (step 4).
 
 ## 1. Check what's there
@@ -122,9 +122,9 @@ To check it worked, type `/` in the prompt. `/dock`, `/queue` and `/handoff` sho
 
 The panel above the prompt stays empty until there's something to show. That's when subagents run, a message is queued, a handoff is ready, or once they've pinned or used a skill.
 
-## 5. Optional: queue with Shift+Enter
+## 5. Optional: queue with Shift+Cmd+Enter
 
-Ask first. This makes Shift+Enter queue a message instead of starting a new line (`ctrl+j` still adds one).
+Ask first. This makes Shift+Cmd+Enter queue a message. Shift+Enter keeps starting a new line.
 
 If they want it, read `~/.claude/keybindings.json`. If it doesn't exist, create it with:
 
@@ -133,14 +133,16 @@ If they want it, read `~/.claude/keybindings.json`. If it doesn't exist, create 
   "$schema": "https://www.schemastore.org/claude-code-keybindings.json",
   "$docs": "https://code.claude.com/docs/en/keybindings",
   "bindings": [
-    { "context": "Chat", "bindings": { "shift+enter": "chat:queueSubmit" } }
+    { "context": "Chat", "bindings": { "shift+cmd+enter": "chat:queueSubmit" } }
   ]
 }
 ```
 
-If it exists, add `"shift+enter": "chat:queueSubmit"` to the `Chat` context's `bindings`, adding that context if it's missing. Keep everything else.
+If it exists, add `"shift+cmd+enter": "chat:queueSubmit"` to the `Chat` context's `bindings`, adding that context if it's missing. Keep everything else.
 
-Some terminals send Shift+Enter as a plain Enter. If it doesn't work there, suggest running `/terminal-setup` once. Without the key, `/queue <message>` does the same job everywhere.
+If the person added `"shift+enter": "chat:queueSubmit"` with an earlier version of these steps, remove it so Shift+Enter starts a new line again.
+
+The terminal only sees Cmd if it reports it (kitty and Ghostty do; Terminal.app and many others don't). Where it doesn't, `ctrl+x enter` (the default) and `/queue <message>` do the same job.
 
 ## Changing where the mods run
 
@@ -163,4 +165,4 @@ rm -rf ~/.claude/mods/clawd-watch                   # optional: deletes the file
 
 On Windows, remove the three paths from `env.CLAUDE_CODE_PLUGIN_DIRS` and the three mods' entries from `pluginConfigs` by hand, then delete the folder.
 
-If the person added the Shift+Enter key, remove `"shift+enter": "chat:queueSubmit"` from `~/.claude/keybindings.json` too.
+If the person added the Shift+Cmd+Enter key, remove `"shift+cmd+enter": "chat:queueSubmit"` from `~/.claude/keybindings.json` too.
