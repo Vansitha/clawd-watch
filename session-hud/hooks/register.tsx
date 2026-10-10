@@ -512,7 +512,8 @@ export const register: Register = on => {
     const meter = (key: string, fraction: number, fill: string, label: string) => {
       const f = clamp(fraction, 0, 1)
 
-      if ('Svg' in t) {
+      // The terminal draws no SVG (its table's Svg renders nothing), so it gets text.
+      if (e.surface !== 'terminal' && 'Svg' in t) {
         const { Svg } = t
         const w = barCells * 8
         const filled = f > 0 ? Math.max(6, Math.round(w * f)) : 0

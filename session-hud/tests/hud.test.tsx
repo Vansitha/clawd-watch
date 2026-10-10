@@ -115,6 +115,9 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
     expect(await view.find({ type: 'Text', text: /^All done by ~/ })).toBeDefined()
     expect(await view.find({ type: 'Text', text: /^done by ~/ })).toBeDefined()
     expect(await view.find({ type: 'Text', text: /Find auth handlers/ })).toBeDefined()
+    // A progress bar: rounded SVG on the desktop, a run of blocks in the terminal.
+    if (surface === 'desktop') expect(await view.find({ type: 'Svg' })).toBeDefined()
+    else expect(await view.find({ type: 'Text', text: /─/ })).toBeDefined()
     await view.unmount()
   }
 

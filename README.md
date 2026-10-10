@@ -124,6 +124,10 @@ Built-in skills such as `simplify` look like ordinary commands until you use the
 
 ## Where it works
 
+In the terminal the same panel is drawn in text, with `[ buttons ]` and block progress bars:
+
+![claude-mods in the terminal](docs/terminal.png)
+
 - **Claude desktop app, Code tab** (local sessions): everything, with native buttons and rounded progress bars.
 - **Terminal** (`claude`): everything, drawn in text. In the fullscreen layout you can click the buttons; otherwise press `ctrl+x tab` to focus the panel.
 - **VS Code extension and mobile:** Claude Code doesn't draw the panel above the prompt there, so nothing shows. The slash commands still work.
