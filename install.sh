@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the Overwatch mods for every Claude Code session (terminal and desktop app):
+# Installs the Clawd Watch mods for every Claude Code session (terminal and desktop app):
 # keeps a clone of this repo and lists each mod in CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json.
 #
 #   ./install.sh                  install, or update an existing install
@@ -9,11 +9,11 @@
 #   ./install.sh --uninstall      remove the mods from settings.json (the clone stays)
 #
 # Without --only, a person running it is asked; otherwise the last choice is kept.
-# Set OVERWATCH_DIR to keep the clone somewhere other than ~/.claude/mods/overwatch.
+# Set CLAWD_WATCH_DIR to keep the clone somewhere other than ~/.claude/mods/clawd-watch.
 # Safe to run again: it never adds a path twice and backs settings.json up first.
 set -euo pipefail
 
-REPO_URL="https://github.com/Vansitha/overwatch.git"
+REPO_URL="https://github.com/Vansitha/clawd-watch.git"
 MODS="session-hud message-queue skill-dock"
 SETTINGS="$HOME/.claude/settings.json"
 ONLY_USAGE="--only takes desktop, terminal or both"
@@ -58,7 +58,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
 if [ -n "$here" ] && [ -f "$here/${MODS%% *}/.claude-plugin/plugin.json" ]; then
   dir="$here"
 else
-  dir="${OVERWATCH_DIR:-$HOME/.claude/mods/overwatch}"
+  dir="${CLAWD_WATCH_DIR:-$HOME/.claude/mods/clawd-watch}"
 fi
 
 if [ "$mode" = "install" ]; then
@@ -211,8 +211,8 @@ with open(file, "w") as f:
 PY
 )
 
-# OVERWATCH_EDITOR picks one (node or python3); the tests use it to check both agree.
-editor="${OVERWATCH_EDITOR:-}"
+# CLAWD_WATCH_EDITOR picks one (node or python3); the tests use it to check both agree.
+editor="${CLAWD_WATCH_EDITOR:-}"
 if [ -z "$editor" ]; then
   if command -v node >/dev/null 2>&1; then
     editor="node"

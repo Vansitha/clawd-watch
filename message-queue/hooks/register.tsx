@@ -6,10 +6,10 @@ import type { QueuedMessage } from '../types'
 const messages = atom({ plugin: 'message-queue', key: 'messages' } as const, [])
 const isPaused = atom({ plugin: 'message-queue', key: 'isPaused' } as const, false)
 
-// Shared by every Overwatch mod; keep these identical across them.
+// Shared by every Clawd Watch mod; keep these identical across them.
 const LABEL_WIDTH = 13
 const NARROW_COLUMNS = 72
-const HINT_KEY = 'overwatch-hint'
+const HINT_KEY = 'clawd-watch-hint'
 const HINT_TEXT = 'ctrl+x tab'
 
 const ACCENT = '#d97757'

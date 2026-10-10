@@ -11,10 +11,10 @@ const agents = atom({ plugin: 'session-hud', key: 'agents' } as const, [])
 const now = atom({ plugin: 'session-hud', key: 'now' } as const, 0)
 const handoff = atom({ plugin: 'session-hud', key: 'handoff' } as const, null)
 
-// Shared by every Overwatch mod; keep these identical across them.
+// Shared by every Clawd Watch mod; keep these identical across them.
 const LABEL_WIDTH = 13
 const NARROW_COLUMNS = 72
-const HINT_KEY = 'overwatch-hint'
+const HINT_KEY = 'clawd-watch-hint'
 const HINT_TEXT = 'ctrl+x tab'
 
 // Colors that read on both light and dark backgrounds.

@@ -16,10 +16,10 @@ const uses = atom({ plugin: 'skill-dock', key: 'uses' } as const, {})
 const skills = atom({ plugin: 'skill-dock', key: 'skills' } as const, [])
 const isInline = atom({ plugin: 'skill-dock', key: 'isInline' } as const, false)
 
-// Shared by every Overwatch mod; keep these identical across them.
+// Shared by every Clawd Watch mod; keep these identical across them.
 const LABEL_WIDTH = 13
 const NARROW_COLUMNS = 72
-const HINT_KEY = 'overwatch-hint'
+const HINT_KEY = 'clawd-watch-hint'
 const HINT_TEXT = 'ctrl+x tab'
 
 const PANE = 'skill-dock'

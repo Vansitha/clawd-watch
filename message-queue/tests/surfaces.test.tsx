@@ -21,9 +21,9 @@ function engine(on: On, below: 'empty' | 'hint' = 'empty') {
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
-    // Another Overwatch mod that already drew the hint.
+    // Another Clawd Watch mod that already drew the hint.
     return below === 'hint' ? (
-      <Box key="overwatch-hint">
+      <Box key="clawd-watch-hint">
         <Text>ctrl+x tab</Text>
       </Box>
     ) : (

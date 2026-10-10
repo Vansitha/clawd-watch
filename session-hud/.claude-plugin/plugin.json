@@ -6,7 +6,7 @@
     "name": "Vansitha"
   },
   "license": "MIT",
-  "repository": "https://github.com/Vansitha/overwatch",
+  "repository": "https://github.com/Vansitha/clawd-watch",
   "types": "./types/index.d.ts",
   "userConfig": {
     "show_in": {

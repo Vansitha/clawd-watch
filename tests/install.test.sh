@@ -8,7 +8,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 # A copy of the repo that isn't a git clone, so install.sh never tries to pull.
-clone="$work/overwatch"
+clone="$work/clawd-watch"
 mkdir -p "$clone"
 cp "$repo/install.sh" "$clone/"
 for mod in session-hud message-queue skill-dock; do
@@ -44,7 +44,7 @@ canonical() {
 run() {
   local editor="$1" home="$2"
   shift 2
-  HOME="$home" PATH="$bin:/usr/bin:/bin" OVERWATCH_EDITOR="$editor" bash "$clone/install.sh" "$@" \
+  HOME="$home" PATH="$bin:/usr/bin:/bin" CLAWD_WATCH_EDITOR="$editor" bash "$clone/install.sh" "$@" \
     </dev/null >/dev/null 2>&1
   echo $?
 }
