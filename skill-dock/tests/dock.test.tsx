@@ -105,7 +105,9 @@ test('using a skill counts it, and pinning from the pane moves it to the front',
       view: {},
     },
   })
-  expect(await pane.find({ type: 'Text', text: 'Plugins · anthropic-skills' })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: 'AVAILABLE HERE' })).toBeDefined()
+  expect(await pane.find({ key: 'used-use-release-checklist' })).toBeDefined()
+  expect(await pane.find({ key: 'all-use-anthropic-skills:pdf' })).toBeDefined()
   await pane.press({ key: 'all-star-release-checklist' })
 
   expect(await dock.find({ key: 'dock-pin-release-checklist' })).toBeDefined()
@@ -150,15 +152,17 @@ test('built-in commands only count as skills once they have been used as one', (
     { name: 'a', description: '', group: 'x' },
     { name: 'b', description: '', group: 'x' },
     { name: 'c', description: '', group: 'x' },
+    { name: 'd', description: '', group: 'x' },
   ]
   const ranked = frequent(
     list,
     ['c'],
-    { a: [NOW - 25 * DAY, NOW - 26 * DAY], b: [NOW], c: [NOW] },
+    { a: [NOW - 25 * DAY, NOW - 26 * DAY], b: [NOW], c: [NOW], d: [NOW - 40 * DAY] },
     NOW,
     5,
   )
-  expect(ranked.map(s => s.name)).toEqual(['b', 'a'])
+  // More uses wins; uses older than 30 days don't count.
+  expect(ranked.map(s => s.name)).toEqual(['a', 'b'])
 })
 
 test('where no pane can be placed, All skills opens the list inside the dock', async ($, on) => {
@@ -167,10 +171,10 @@ test('where no pane can be placed, All skills opens the list inside the dock', a
 
   const ui = await $.ui.mount({ ...band, surface: 'desktop' })
   await ui.press({ key: 'dock-all' })
-  expect(await ui.find({ key: 'filter' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'AVAILABLE HERE' })).toBeDefined()
   expect((await ui.find({ key: 'dock-all' }))?.props.label).toBe('Close')
 
   await ui.press({ key: 'dock-all' })
-  expect(await ui.find({ key: 'filter' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'AVAILABLE HERE' })).toBeUndefined()
   await ui.unmount()
 })

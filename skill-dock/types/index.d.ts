@@ -9,7 +9,6 @@ declare module 'claude-code' {
       pins: string[]
       uses: Uses
       skills: SkillEntry[]
-      filter: string
       isInline: boolean
     }
   }

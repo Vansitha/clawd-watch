@@ -6,7 +6,6 @@ import type { SkillEntry, Uses } from '../types'
 const pins = atom({ plugin: 'skill-dock', key: 'pins' } as const, [])
 const uses = atom({ plugin: 'skill-dock', key: 'uses' } as const, {})
 const skills = atom({ plugin: 'skill-dock', key: 'skills' } as const, [])
-const filter = atom({ plugin: 'skill-dock', key: 'filter' } as const, '')
 const isInline = atom({ plugin: 'skill-dock', key: 'isInline' } as const, false)
 
 const PANE = 'skill-dock'
@@ -18,12 +17,7 @@ const WINDOW = 30 * DAY
 const KEEP = 60 * DAY
 const MAX_USES = 60
 const DOCK_FREQUENT = 5
-const PANE_FREQUENT = 8
-
-const GROUP_ORDER = ['Yours & this project', 'Plugins', 'Built-in', 'MCP']
-
-// Claude's orange, matching session-hud; reads on light and dark backgrounds.
-const ACCENT = '#d97757'
+const PANE_FREQUENT = 10
 
 export function score(times: readonly number[] = [], at: number): number {
   return times.reduce((sum, t) => sum + Math.pow(0.5, (at - t) / HALF_LIFE), 0)
@@ -33,7 +27,7 @@ export function recentCount(times: readonly number[] = [], at: number): number {
   return times.filter(t => at - t <= WINDOW).length
 }
 
-/** The most-used skills that are not pinned, best first. */
+/** The most-used skills that are not pinned, most uses first. */
 export function frequent(
   list: readonly SkillEntry[],
   pinned: readonly string[],
@@ -43,7 +37,12 @@ export function frequent(
 ): SkillEntry[] {
   return list
     .filter(s => !pinned.includes(s.name) && recentCount(used[s.name], at) > 0)
-    .sort((a, b) => score(used[b.name], at) - score(used[a.name], at))
+    // Most uses in the last 30 days first; recent use breaks ties.
+    .sort(
+      (a, b) =>
+        recentCount(used[b.name], at) - recentCount(used[a.name], at) ||
+        score(used[b.name], at) - score(used[a.name], at),
+    )
     .slice(0, limit)
 }
 
@@ -60,25 +59,6 @@ export function groupOf(info: CommandInfo, known: readonly string[]): string | u
 /** The name without a plugin's namespace: `anthropic-skills:pdf` reads `pdf`. */
 function short(name: string): string {
   return name.includes(':') ? name.slice(name.lastIndexOf(':') + 1) : name
-}
-
-function ago(times: readonly number[] = [], at: number): string {
-  if (times.length === 0) return 'not used yet'
-  const days = Math.floor((at - Math.max(...times)) / DAY)
-
-  return days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${days}d ago`
-}
-
-function matches(s: SkillEntry, query: string): boolean {
-  const q = query.trim().toLowerCase()
-
-  return !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)
-}
-
-function groupRank(group: string): number {
-  const i = GROUP_ORDER.findIndex(prefix => group.startsWith(prefix))
-
-  return i === -1 ? GROUP_ORDER.length : i
 }
 
 async function stored<T>($: EngineInterface, key: string, fallback: T): Promise<T> {
@@ -152,60 +132,21 @@ async function openAll($: EngineInterface) {
   await update($, isInline, () => !opened.isPlaced)
 }
 
-/** The pinned, frequent and full lists, drawn in the pane or under the dock. */
+/** Pinned, most used and every skill available here: the pane, or the list under the dock. */
 function skillList(
   $: EngineInterface,
   t: ElementTable,
-  state: { list: SkillEntry[]; pinned: string[]; used: Uses; query: string; at: number },
+  state: { list: SkillEntry[]; pinned: string[]; used: Uses; at: number },
 ) {
   const { Box, Text, Button } = t
-  // The mobile app draws no text field, so its list has no filter.
-  const Input = 'Input' in t ? t.Input : undefined
-  const { list, pinned, used, query, at } = state
+  const { list, pinned, used, at } = state
   const byName = new Map(list.map(s => [s.name, s]))
   const entry = (name: string): SkillEntry =>
     byName.get(name) ?? { name, description: '', group: 'Built-in' }
+  const mostUsed = frequent(list, [], used, at, PANE_FREQUENT)
+  const available = [...list].sort((a, b) => short(a.name).localeCompare(short(b.name)))
 
-  const pinnedShown = pinned.map(entry).filter(s => matches(s, query))
-  const freqShown = frequent(list, pinned, used, at, PANE_FREQUENT).filter(s => matches(s, query))
-  const top = Math.max(0.01, ...freqShown.map(s => score(used[s.name], at)))
-  const all = list.filter(s => matches(s, query))
-  const groups = [...new Set(all.map(s => s.group))].sort(
-    (a, b) => groupRank(a) - groupRank(b) || a.localeCompare(b),
-  )
-
-  // A short rounded bar where the surface draws SVG, a run of blocks in the terminal.
-  const meter = (key: string, fraction: number) => {
-    const f = Math.min(1, Math.max(0, fraction))
-    if ('Svg' in t) {
-      const { Svg } = t
-      const filled = Math.max(5, Math.round(56 * f))
-      const source =
-        `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="5" viewBox="0 0 56 5">` +
-        `<rect width="56" height="5" rx="2.5" fill="#8b8b8b" fill-opacity="0.25"/>` +
-        `<rect width="${filled}" height="5" rx="2.5" fill="${ACCENT}"/></svg>`
-
-      return (
-        <Svg
-          key={key}
-          source={source}
-          alt={`${Math.round(f * 100)}% of your top skill`}
-          width={56}
-          height={5}
-        />
-      )
-    }
-    const cells = Math.max(1, Math.round(f * 8))
-
-    return (
-      <Box flexDirection="row">
-        <Text color={ACCENT}>{'━'.repeat(cells)}</Text>
-        <Text dimColor>{'─'.repeat(8 - cells)}</Text>
-      </Box>
-    )
-  }
-
-  const row = (section: string, s: SkillEntry, meta: string, share?: number) => {
+  const row = (section: string, s: SkillEntry, meta = '') => {
     const isPinned = pinned.includes(s.name)
 
     return (
@@ -217,79 +158,47 @@ function skillList(
           label={isPinned ? '★' : '☆'}
           onPress={async () => {
             const nowPinned = await togglePin($, s.name)
-            $.ui.toast(`${nowPinned ? 'Pinned' : 'Unpinned'} /${s.name}`)
+            $.ui.toast(`${nowPinned ? 'Pinned' : 'Unpinned'} /${short(s.name)}`)
           }}
         />
-        <Button
-          key={`${section}-use-${s.name}`}
-          plain
-          label={short(s.name)}
-          onPress={() => insertSkill($, s.name)}
-        />
-        <Box flexGrow={1} flexShrink={1} minWidth={0} marginLeft={1}>
-          <Text dimColor wrap="truncate-end">
-            {s.description}
-          </Text>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Button
+            key={`${section}-use-${s.name}`}
+            plain
+            label={short(s.name)}
+            onPress={() => insertSkill($, s.name)}
+          />
         </Box>
-        {share !== undefined && meter(`${section}-bar-${s.name}`, share)}
         {meta !== '' && <Text dimColor>{meta}</Text>}
       </Box>
     )
   }
 
-  const title = (left: string, right = '') => (
-    <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
+  const section = (name: string, count: string, first = false) => (
+    <Box flexDirection="row" justifyContent="space-between" marginTop={first ? 0 : 1}>
       <Text dimColor bold>
-        {left.toUpperCase()}
+        {name.toUpperCase()}
       </Text>
-      {right !== '' && <Text dimColor>{right}</Text>}
+      <Text dimColor>{count}</Text>
     </Box>
   )
 
   const empty = (text: string) => (
-    <Box paddingLeft={2}>
-      <Text dimColor italic>
-        {text}
-      </Text>
-    </Box>
+    <Text dimColor italic>
+      {text}
+    </Text>
   )
 
   return (
     <Box flexDirection="column">
-      {Input && (
-        <Input
-          key="filter"
-          placeholder="Filter skills…"
-          value={query}
-          submitLabel="insert first"
-          onInput={value => void update($, filter, () => value)}
-          onSubmit={value => {
-            const first = [...pinnedShown, ...freqShown, ...list].find(s => matches(s, value))
-            if (first) void insertSkill($, first.name)
-          }}
-        />
-      )}
-      {title('Pinned', pinned.length ? `${pinned.length}` : '')}
-      {pinnedShown.length === 0 &&
-        empty(query ? 'No pinned skills match.' : 'Click ☆ next to any skill to pin it.')}
-      {pinnedShown.map(s => row('pinned', s, used[s.name]?.length ? ago(used[s.name], at) : ''))}
-      {title('Frequently used', 'last 30 days')}
-      {freqShown.length === 0 &&
-        empty(query ? 'Nothing matches.' : 'Skills you use will show up here.')}
-      {freqShown.map(s =>
-        row('freq', s, `${recentCount(used[s.name], at)}×`, score(used[s.name], at) / top),
-      )}
-      {title('All skills', `${list.length}`)}
-      {all.length === 0 && empty(`No skills match "${query}".`)}
-      {groups.map((group, index) => (
-        <Box flexDirection="column" marginTop={index === 0 ? 0 : 1}>
-          <Text dimColor>{group}</Text>
-          {all
-            .filter(s => s.group === group)
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map(s => row('all', s, ''))}
-        </Box>
-      ))}
+      {section('Pinned', pinned.length ? `${pinned.length}` : '', true)}
+      {pinned.length === 0 && empty('Click ☆ next to a skill to pin it.')}
+      {pinned.map(name => row('pinned', entry(name)))}
+      {section('Most used', 'last 30 days')}
+      {mostUsed.length === 0 && empty('Skills you use will show up here.')}
+      {mostUsed.map(s => row('used', s, `${recentCount(used[s.name], at)}×`))}
+      {section('Available here', `${available.length}`)}
+      {available.map(s => row('all', s))}
     </Box>
   )
 }
@@ -351,12 +260,11 @@ export const register: Register = on => {
     const below = await next(e)
     if (e.props.hasSurvey) return below
 
-    const [pinned, used, list, inline, query] = await Promise.all([
+    const [pinned, used, list, inline] = await Promise.all([
       read($, pins),
       read($, uses),
       read($, skills),
       read($, isInline),
-      read($, filter),
     ])
     const at = await $.clock.now()
     const freq = frequent(list, pinned, used, at, DOCK_FREQUENT)
@@ -427,7 +335,7 @@ export const register: Register = on => {
         </Box>
         {inline && (
           <Box flexDirection="column" marginBottom={isDesktop && hasBelow ? 1 : 0}>
-            {skillList($, t, { list, pinned, used, query, at })}
+            {skillList($, t, { list, pinned, used, at })}
           </Box>
         )}
         {below}
@@ -436,13 +344,8 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const [pinned, used, list, query] = await Promise.all([
-      read($, pins),
-      read($, uses),
-      read($, skills),
-      read($, filter),
-    ])
+    const [pinned, used, list] = await Promise.all([read($, pins), read($, uses), read($, skills)])
 
-    return skillList($, $.ui.resolve(e), { list, pinned, used, query, at: await $.clock.now() })
+    return skillList($, $.ui.resolve(e), { list, pinned, used, at: await $.clock.now() })
   })
 }

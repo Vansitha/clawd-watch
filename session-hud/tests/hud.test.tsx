@@ -111,16 +111,18 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
   for (const surface of ['terminal', 'desktop'] as const) {
     const view = await $.ui.mount({ ...band(), surface })
     expect(await view.find({ type: 'Text', text: 'Subagents' })).toBeDefined()
-    expect(await view.find({ type: 'Text', text: /^1 running/ })).toBeDefined()
+    expect(await view.find({ type: 'Text', text: /^All done by ~/ })).toBeDefined()
+    expect(await view.find({ type: 'Text', text: /^done by ~/ })).toBeDefined()
     expect(await view.find({ type: 'Text', text: /Find auth handlers/ })).toBeDefined()
     await view.unmount()
   }
 
   const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
 
-  // Elapsed time follows the clock even when nothing else changes.
+  // Estimates follow the clock even when nothing else changes.
+  const before = (await ui.find({ type: 'Text', text: /^·  ~/ }))?.text
   await clock.advance(65_000)
-  expect(await ui.find({ type: 'Text', text: /^1:05/ })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /^·  ~/ }))?.text).not.toBe(before)
 
   await $.turn.complete({
     answer: 'found',
@@ -130,8 +132,8 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
     agentId: 'agent-1',
     reason: 'answer',
   })
-  expect(await ui.find({ type: 'Text', text: '1 done' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^done in/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'All done' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^finished in 1m 5s/ })).toBeDefined()
   await ui.unmount()
 })
 

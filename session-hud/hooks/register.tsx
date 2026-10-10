@@ -536,21 +536,17 @@ export const register: Register = on => {
       const running = shown.filter(run => run.status === 'running')
       const left = Math.max(0, ...shown.map(run => estimate(run, at).remaining))
       const spin = SPINNER[Math.floor(at / 1000) % SPINNER.length]
-      const finished = shown.length - running.length
-      const summary = running.length
-        ? [
-            `${running.length} running`,
-            ...(finished ? [`${finished} done`] : []),
-            `~${duration(left)} left`,
-            `done ≈ ${clockTime(at + left)}`,
-          ]
-        : [`${finished} done`]
       const rows: JSX.Element[] = [
-        <Box flexDirection="row" gap={2}>
+        <Box flexDirection="row" justifyContent="space-between" gap={2}>
           <Text bold>Subagents</Text>
-          <Text dimColor wrap="truncate-end">
-            {summary.join('  ·  ')}
-          </Text>
+          {running.length > 0 ? (
+            <Box flexDirection="row" gap={1}>
+              <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
+              <Text dimColor>{`·  in ~${duration(left)}`}</Text>
+            </Box>
+          ) : (
+            <Text color={SUCCESS}>All done</Text>
+          )}
         </Box>,
       ]
 
@@ -560,30 +556,38 @@ export const register: Register = on => {
         // Braille spinners read as stray dots in a proportional font.
         const glyph = isRunning ? (isDesktop ? '●' : spin) : run.status === 'done' ? '✓' : '✗'
         const tone = run.status === 'failed' ? ERROR : run.status === 'done' ? SUCCESS : ACCENT
-        const percent = Math.round(progress * 100)
-        const timing = isRunning
-          ? `${stopwatch(elapsed)}  ·  ~${duration(remaining)} left`
-          : run.status === 'done'
-            ? `done in ${duration(elapsed)}`
-            : `stopped after ${duration(elapsed)}`
 
         rows.push(
           <Box flexDirection="column" marginTop={isDesktop ? 1 : 0}>
             <Box flexDirection="row" justifyContent="space-between" gap={2}>
               <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
                 <Text color={tone}>{glyph}</Text>
-                <Text wrap="truncate-end">{run.description}</Text>
-                <Text dimColor wrap="truncate-end">
-                  {run.type}
+                <Text wrap="truncate-end" dimColor={!isRunning}>
+                  {run.description}
                 </Text>
               </Box>
-              <Text dimColor>{timing}</Text>
+              {isRunning ? (
+                <Box flexDirection="row" gap={1}>
+                  <Text>{`done by ~${clockTime(at + remaining)}`}</Text>
+                  <Text dimColor>{`·  ~${duration(remaining)}`}</Text>
+                </Box>
+              ) : (
+                <Text dimColor>
+                  {run.status === 'done'
+                    ? `finished in ${duration(elapsed)}`
+                    : `stopped after ${duration(elapsed)}`}
+                </Text>
+              )}
             </Box>
             {isRunning && (
-              <Box flexDirection="row" gap={1} paddingLeft={2} alignItems="center">
-                {meter(`bar-${run.toolUseId}`, progress, ACCENT, `${percent}% done`)}
-                <Text dimColor>{`${percent}%`.padStart(4)}</Text>
-                <Box flexShrink={1} minWidth={0} marginLeft={1}>
+              <Box flexDirection="row" gap={2} paddingLeft={2} alignItems="center">
+                {meter(
+                  `bar-${run.toolUseId}`,
+                  progress,
+                  ACCENT,
+                  `about ${Math.round(progress * 100)}% done`,
+                )}
+                <Box flexShrink={1} minWidth={0}>
                   <Text dimColor italic wrap="truncate-end">
                     {run.activity}
                   </Text>
