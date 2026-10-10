@@ -1,45 +1,115 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface } from 'claude-code'
+import type { ElementTable, EngineInterface, Register, RenderSurface, Timer } from 'claude-code'
 
 import type { AgentRun, Handoff } from '../types'
+
+type ReadyHandoff = Extract<Handoff, { phase: 'ready' }>
+type Sample = { type: string; ms: number; steps: number }
+type Style = { isText: boolean; isNarrow: boolean; barCells: number }
 
 const agents = atom({ plugin: 'session-hud', key: 'agents' } as const, [])
 const now = atom({ plugin: 'session-hud', key: 'now' } as const, 0)
 const handoff = atom({ plugin: 'session-hud', key: 'handoff' } as const, null)
 
-// How long a finished subagent stays on screen before the panel clears.
-const LINGER_MS = 8000
-// How many past subagent runs the ETA model learns from.
-const HISTORY_SIZE = 60
-// An auto suggestion goes stale after this many further turns.
-const STALE_TURNS = 3
-// How often, in once-a-second ticks, to check running subagents against the engine's list.
-const RECONCILE_EVERY_TICKS = 10
-
-// What a subagent of each type takes before the mod has seen any finish.
-const DEFAULT_MS: Record<string, number> = {
-  Explore: 90_000,
-  Plan: 120_000,
-  'general-purpose': 300_000,
-}
-const DEFAULT_STEPS: Record<string, number> = {
-  Explore: 20,
-  Plan: 15,
-  'general-purpose': 40,
-}
-const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+// Shared by every Overwatch mod; keep these identical across them.
+const LABEL_WIDTH = 13
+const NARROW_COLUMNS = 72
+const HINT_KEY = 'overwatch-hint'
+const HINT_TEXT = 'ctrl+x tab'
 
 // Colors that read on both light and dark backgrounds.
 const ACCENT = '#d97757'
 const SUCCESS = '#5fa865'
 const ERROR = '#d9534f'
+const BAR_TRACK = '#8b8b8b'
 
-// The width of the section-name column every Overwatch mod shares, in cells.
-const LABEL_WIDTH = 13
-// Narrower than this, a section's name goes on its own line above its content.
-const NARROW_COLUMNS = 72
-// The "ctrl+x tab" hint's key: the first mod in the band to draw it shows it, the rest see it.
-const HINT_KEY = 'overwatch-hint'
+const TICK_MS = 1000
+const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+/** How long a finished subagent stays on screen. */
+const LINGER_MS = 8000
+const MAX_AGENT_ROWS = 12
+/** Rows the band spends on things other than agent rows, and the rows each agent takes. */
+const BAND_CHROME_ROWS = 3
+const ROWS_PER_AGENT = 2
+/** Check running rows against the engine's agent list this often, in ticks. */
+const RECONCILE_EVERY_TICKS = 10
+
+/** Past runs the ETA model learns from, and how many of a type it needs before trusting them. */
+const HISTORY_SIZE = 60
+const MIN_SAMPLES = 3
+/** What a subagent takes before any run of its type has been seen. */
+const DEFAULT_MS: Record<string, number> = {
+  Explore: 90_000,
+  Plan: 120_000,
+  'general-purpose': 300_000,
+}
+const DEFAULT_STEPS: Record<string, number> = { Explore: 20, Plan: 15, 'general-purpose': 40 }
+const FALLBACK_MS = 180_000
+const FALLBACK_STEPS = 25
+
+/** When to ask Claude whether the next work fits a fresh session. */
+const CHECK_AFTER_TURNS = 4
+const CHECK_AT_CONTEXT_PERCENT = 30
+const CHECK_ALWAYS_AFTER_TURNS = 12
+const CHECK_DELAY_MS = 1500
+/** An unused suggestion clears after this many more turns. */
+const STALE_TURNS = 3
+
+const MIN_BAND_COLUMNS = 30
+const COLUMNS_PER_BAR_CELL = 6
+const BAR_MIN_CELLS = 10
+const BAR_MAX_CELLS = 20
+const BAR_PX_PER_CELL = 8
+const BAR_HEIGHT_PX = 6
+const LONG_TOAST_MS = 8000
+
+const STORE_HISTORY = 'agentHistory'
+const STORE_AUTO_SUGGEST = 'autoSuggest'
+
+const STATUS_LOOK: Record<AgentRun['status'], { glyph: string; tone: string; verb: string }> = {
+  running: { glyph: '●', tone: ACCENT, verb: '' },
+  done: { glyph: '✓', tone: SUCCESS, verb: 'finished in' },
+  failed: { glyph: '✗', tone: ERROR, verb: 'stopped after' },
+}
+
+const HANDOFF_RULES = `The starter prompt goes to a brand-new Claude Code session that has none of this conversation's context. It must stand alone: state the goal; what is already done (file paths, branch, commands, PRs); key decisions and constraints; what remains, as concrete next steps; and how to verify the result. Address the new session directly ("You are continuing..."), keep it tight, no preamble.`
+
+const HANDOFF_FORMAT = `<title>3 to 6 word title of the next work</title>
+<handoff>
+the starter prompt
+</handoff>`
+
+const AUTO_ASK = `Stop and do not continue the work. Judge one question: would the NEXT piece of work in this conversation go better in a fresh Claude Code session (cleared context) than here?
+Say yes only when the next work is a distinct task that needs little of the detail above (a new feature, a separate bug, moving from planning to a large implementation), or when this context is long and mostly no longer relevant to what comes next.
+Say no when we are mid-task, debugging something that depends on details above, waiting on an answer from the user, or the conversation is short.
+Reply in exactly this format and nothing else:
+<decision>yes or no</decision>
+<reason>one short sentence, under 12 words, saying why</reason>
+Only when the decision is yes, add after it:
+${HANDOFF_FORMAT}
+${HANDOFF_RULES}`
+
+function manualAsk(focus: string): string {
+  const target = focus
+    ? `Focus the handoff on: ${focus}`
+    : 'Focus on the next piece of work we were about to do.'
+
+  return `Stop and do not continue the work. Write a handoff so it can continue in a fresh session.
+${target}
+${HANDOFF_RULES}
+Reply in exactly this format and nothing else:
+${HANDOFF_FORMAT}`
+}
+
+const local: {
+  contextPercent: number
+  turnsSinceCheck: number
+  isChecking: boolean
+  wasLive: boolean
+  ticks: number
+  ticker?: Timer
+  history?: Sample[]
+} = { contextPercent: 0, turnsSinceCheck: 0, isChecking: false, wasLive: false, ticks: 0 }
 
 /** Whether a drawn tree already holds an element with this key. */
 function hasKey(node: unknown, key: string): boolean {
@@ -47,6 +117,11 @@ function hasKey(node: unknown, key: string): boolean {
   const element = node as { props?: { key?: unknown }; children?: unknown[] }
 
   return element.props?.key === key || (element.children ?? []).some(c => hasKey(c, key))
+}
+
+/** Whether another mod drew anything above this one. */
+function hasContent(tree: unknown): boolean {
+  return ((tree as { children?: unknown[] }).children?.length ?? 0) > 0
 }
 
 /** Whether the "Show in" setting (both, desktop or terminal) includes a surface. */
@@ -65,37 +140,6 @@ async function isActive($: EngineInterface, showIn: string): Promise<boolean> {
   // Until a client attaches (the desktop app, the SDK) nothing rules the mod out.
   return surfaces.length === 0 || surfaces.some(surface => runsOn(showIn, surface))
 }
-
-type Sample = { type: string; ms: number; steps: number }
-
-const HANDOFF_RULES = `The starter prompt goes to a brand-new Claude Code session that has none of this conversation's context. It must stand alone: state the goal; what is already done (file paths, branch, commands, PRs); key decisions and constraints; what remains, as concrete next steps; and how to verify the result. Address the new session directly ("You are continuing..."), keep it tight, no preamble.`
-
-const HANDOFF_FORMAT = `<title>3 to 6 word title of the next work</title>
-<handoff>
-the starter prompt
-</handoff>`
-
-function manualAsk(focus: string): string {
-  const target = focus
-    ? `Focus the handoff on: ${focus}`
-    : 'Focus on the next piece of work we were about to do.'
-
-  return `Stop and do not continue the work. Write a handoff so it can continue in a fresh session.
-${target}
-${HANDOFF_RULES}
-Reply in exactly this format and nothing else:
-${HANDOFF_FORMAT}`
-}
-
-const AUTO_ASK = `Stop and do not continue the work. Judge one question: would the NEXT piece of work in this conversation go better in a fresh Claude Code session (cleared context) than here?
-Say yes only when the next work is a distinct task that needs little of the detail above (a new feature, a separate bug, moving from planning to a large implementation), or when this context is long and mostly no longer relevant to what comes next.
-Say no when we are mid-task, debugging something that depends on details above, waiting on an answer from the user, or the conversation is short.
-Reply in exactly this format and nothing else:
-<decision>yes or no</decision>
-<reason>one short sentence, under 12 words, saying why</reason>
-Only when the decision is yes, add after it:
-${HANDOFF_FORMAT}
-${HANDOFF_RULES}`
 
 function tag(text: string, name: string): string | undefined {
   const match = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)
@@ -123,12 +167,6 @@ function duration(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
-function stopwatch(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000))
-
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-
 function clockTime(ms: number): string {
   try {
     return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -137,12 +175,6 @@ function clockTime(ms: number): string {
 
     return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
   }
-}
-
-function bar(fraction: number, width: number, full: string, empty: string): [string, string] {
-  const filled = Math.round(clamp(fraction, 0, 1) * width)
-
-  return [full.repeat(filled), empty.repeat(width - filled)]
 }
 
 function basename(path: unknown): string {
@@ -208,72 +240,31 @@ function isAgentTool(tool: string): boolean {
   return tool === 'Agent' || tool === 'Task'
 }
 
-// The module's own counters: they start over when the mod reloads.
-const local = {
-  contextPercent: 0,
-  turnsSinceCheck: 0,
-  isChecking: false,
-  wasLive: false,
-  isTicking: false,
-  ticks: 0,
+function readyHandoff(
+  source: ReadyHandoff['source'],
+  title: string,
+  reason: string,
+  prompt: string,
+): ReadyHandoff {
+  return { phase: 'ready', source, title, reason, prompt, turnsSince: 0 }
 }
 
-/** Starts the once-a-second redraw that keeps elapsed times and ETAs moving. */
+/** Redraws once a second while subagents are on screen, so times keep moving. */
 function startTicker($: EngineInterface) {
-  if (local.isTicking) return
-  local.isTicking = true
-  $.clock.every(1000, () => void tick($))
-}
-
-async function history($: EngineInterface): Promise<Sample[]> {
-  const stored = await $.store.get('agentHistory')
-
-  return Array.isArray(stored) ? (stored as Sample[]) : []
-}
-
-async function expectation($: EngineInterface, type: string) {
-  const past = await history($)
-  const same = past.filter(sample => sample.type === type)
-  const basis = same.length >= 3 ? same : past.length >= 3 ? past : []
-
-  return basis.length
-    ? {
-        expectedMs: median(basis.map(sample => sample.ms)),
-        expectedSteps: Math.max(1, median(basis.map(sample => sample.steps))),
-      }
-    : { expectedMs: DEFAULT_MS[type] ?? 180_000, expectedSteps: DEFAULT_STEPS[type] ?? 25 }
-}
-
-async function finish(
-  $: EngineInterface,
-  matches: (run: AgentRun) => boolean,
-  status: AgentRun['status'],
-) {
-  const at = await $.clock.now()
-  const run = (await read($, agents)).find(one => one.status === 'running' && matches(one))
-  if (!run) return
-
-  await update($, agents, list =>
-    list.map(one =>
-      one.toolUseId === run.toolUseId && one.status === 'running'
-        ? { ...one, status, endedAt: at, activity: status === 'done' ? 'Done' : 'Stopped' }
-        : one,
-    ),
-  )
-  await update($, now, () => at)
-
-  if (status === 'done') {
-    const sample: Sample = { type: run.type, ms: at - run.startedAt, steps: run.steps }
-    await $.store.set('agentHistory', [...(await history($)), sample].slice(-HISTORY_SIZE))
-  }
+  local.ticker ??= $.clock.every(TICK_MS, () => void tick($))
 }
 
 async function tick($: EngineInterface) {
-  const at = await $.clock.now()
-  const list = await read($, agents)
+  const [at, list] = await Promise.all([$.clock.now(), read($, agents)])
   const isLive = list.some(run => isShown(run, at))
   if (isLive || local.wasLive) await update($, now, () => at)
   local.wasLive = isLive
+
+  if (!isLive) {
+    local.ticker?.cancel()
+    local.ticker = undefined
+    return
+  }
 
   local.ticks += 1
   if (local.ticks % RECONCILE_EVERY_TICKS === 0) await reconcile($, list)
@@ -293,6 +284,61 @@ async function reconcile($: EngineInterface, list: readonly AgentRun[]) {
   }
 }
 
+async function history($: EngineInterface): Promise<Sample[]> {
+  if (!local.history) {
+    const stored = await $.store.get(STORE_HISTORY)
+    local.history = Array.isArray(stored) ? (stored as Sample[]) : []
+  }
+
+  return local.history
+}
+
+async function remember($: EngineInterface, sample: Sample) {
+  local.history = [...(await history($)), sample].slice(-HISTORY_SIZE)
+  await $.store.set(STORE_HISTORY, local.history)
+}
+
+async function expectation($: EngineInterface, type: string) {
+  const past = await history($)
+  const same = past.filter(sample => sample.type === type)
+  const basis = same.length >= MIN_SAMPLES ? same : past.length >= MIN_SAMPLES ? past : []
+
+  return basis.length
+    ? {
+        expectedMs: median(basis.map(sample => sample.ms)),
+        expectedSteps: Math.max(1, median(basis.map(sample => sample.steps))),
+      }
+    : {
+        expectedMs: DEFAULT_MS[type] ?? FALLBACK_MS,
+        expectedSteps: DEFAULT_STEPS[type] ?? FALLBACK_STEPS,
+      }
+}
+
+async function finish(
+  $: EngineInterface,
+  matches: (run: AgentRun) => boolean,
+  status: AgentRun['status'],
+) {
+  const [at, list] = await Promise.all([$.clock.now(), read($, agents)])
+  const run = list.find(one => one.status === 'running' && matches(one))
+  if (!run) return
+
+  await Promise.all([
+    update($, agents, all =>
+      all.map(one =>
+        one.toolUseId === run.toolUseId && one.status === 'running'
+          ? { ...one, status, endedAt: at }
+          : one,
+      ),
+    ),
+    update($, now, () => at),
+  ])
+
+  if (status === 'done') {
+    await remember($, { type: run.type, ms: at - run.startedAt, steps: run.steps })
+  }
+}
+
 async function writeHandoff($: EngineInterface, focus: string) {
   const reply = await $.model.fork({ prompt: manualAsk(focus) }).catch((error: unknown) => ({
     isAnswered: false as const,
@@ -308,14 +354,7 @@ async function writeHandoff($: EngineInterface, focus: string) {
   }
 
   const title = (reply.isAnswered && tag(reply.text, 'title')) || 'Continue in a fresh session'
-  await update($, handoff, () => ({
-    phase: 'ready' as const,
-    source: 'manual' as const,
-    title,
-    reason: '',
-    prompt,
-    turnsSince: 0,
-  }))
+  await update($, handoff, () => readyHandoff('manual', title, '', prompt))
 }
 
 async function autoCheck($: EngineInterface) {
@@ -324,29 +363,21 @@ async function autoCheck($: EngineInterface) {
 
   try {
     const reply = await $.model.fork({ prompt: AUTO_ASK }).catch(() => undefined)
-    if (!reply?.isAnswered) return
-    if (tag(reply.text, 'decision')?.toLowerCase() !== 'yes') return
+    if (!reply?.isAnswered || tag(reply.text, 'decision')?.toLowerCase() !== 'yes') return
 
     const prompt = tag(reply.text, 'handoff')
     if (!prompt || (await read($, handoff))) return
 
-    await update($, handoff, () => ({
-      phase: 'ready' as const,
-      source: 'auto' as const,
-      title: tag(reply.text, 'title') ?? 'Next task',
-      reason: tag(reply.text, 'reason') ?? 'fits a fresh session',
-      prompt,
-      turnsSince: 0,
-    }))
+    const title = tag(reply.text, 'title') ?? 'Next task'
+    const reason = tag(reply.text, 'reason') ?? 'fits a fresh session'
+    await update($, handoff, () => readyHandoff('auto', title, reason, prompt))
     $.ui.toast('The next task fits a fresh session: the handoff is ready above the prompt.')
   } finally {
     local.isChecking = false
   }
 }
 
-async function startFresh($: EngineInterface, ready: Handoff, surface: RenderSurface) {
-  if (ready.phase !== 'ready') return
-
+async function startFresh($: EngineInterface, ready: ReadyHandoff, surface: RenderSurface) {
   await update($, handoff, () => null)
   await $.ui.copy({ text: ready.prompt, surface }).catch(() => undefined)
 
@@ -356,9 +387,7 @@ async function startFresh($: EngineInterface, ready: Handoff, surface: RenderSur
     await update($, handoff, () => ready)
     $.ui.toast(
       'Could not clear the session; the handoff is on your clipboard. Run /clear and paste it.',
-      {
-        timeoutMs: 8000,
-      },
+      { timeoutMs: LONG_TOAST_MS },
     )
     return
   }
@@ -366,34 +395,242 @@ async function startFresh($: EngineInterface, ready: Handoff, surface: RenderSur
   await $.prompt.submit({ text: ready.prompt, asUser: true })
 }
 
+async function copyHandoff($: EngineInterface, ready: ReadyHandoff, surface: RenderSurface) {
+  const copied = await $.ui.copy({ text: ready.prompt, surface })
+  $.ui.toast(copied.isCopied ? 'Handoff copied.' : 'Could not reach the clipboard.')
+}
+
+/** A band section: its name in the shared left column (above it when narrow), content beside. */
+function section(
+  t: ElementTable,
+  label: string,
+  content: JSX.Element,
+  layout: { isNarrow: boolean; hasHint?: boolean; isCentred?: boolean },
+) {
+  const { Box, Text } = t
+  const { isNarrow, hasHint = false, isCentred = false } = layout
+
+  return (
+    <Box
+      flexDirection={isNarrow ? 'column' : 'row'}
+      gap={isNarrow ? 0 : 2}
+      alignItems={isCentred && !hasHint && !isNarrow ? 'center' : 'flex-start'}
+    >
+      <Box flexDirection="column" flexShrink={0} {...(isNarrow ? {} : { width: LABEL_WIDTH })}>
+        <Text dimColor>{label}</Text>
+        {hasHint && (
+          <Box key={HINT_KEY}>
+            <Text dimColor italic>
+              {HINT_TEXT}
+            </Text>
+          </Box>
+        )}
+      </Box>
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        minWidth={0}
+        paddingLeft={isNarrow ? 2 : 0}
+      >
+        {content}
+      </Box>
+    </Box>
+  )
+}
+
+/** A progress bar: rounded SVG on graphical surfaces, a run of blocks in the terminal. */
+function meter(t: ElementTable, key: string, fraction: number, label: string, style: Style) {
+  const { Box, Text } = t
+  const f = clamp(fraction, 0, 1)
+
+  if (!style.isText && 'Svg' in t) {
+    const { Svg } = t
+    const width = style.barCells * BAR_PX_PER_CELL
+    // Not `h`: that name is the JSX factory.
+    const height = BAR_HEIGHT_PX
+    const filled = f > 0 ? Math.max(height, Math.round(width * f)) : 0
+    const rect = (length: number, paint: string) =>
+      `<rect width="${length}" height="${height}" rx="${height / 2}" ${paint}/>`
+    const source =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+      rect(width, `fill="${BAR_TRACK}" fill-opacity="0.25"`) +
+      (filled ? rect(filled, `fill="${ACCENT}"`) : '') +
+      `</svg>`
+
+    return <Svg key={key} source={source} alt={label} width={width} height={height} />
+  }
+
+  const filled = Math.round(f * style.barCells)
+
+  return (
+    <Box flexDirection="row">
+      <Text color={ACCENT}>{'━'.repeat(filled)}</Text>
+      <Text dimColor>{'─'.repeat(style.barCells - filled)}</Text>
+    </Box>
+  )
+}
+
+function agentRow(t: ElementTable, run: AgentRun, at: number, style: Style) {
+  const { Box, Text } = t
+  const { elapsed, progress, remaining } = estimate(run, at)
+  const look = STATUS_LOOK[run.status]
+  const isRunning = run.status === 'running'
+  // Braille spinners read as stray dots in a proportional font, so only the terminal spins.
+  const glyph =
+    isRunning && style.isText ? SPINNER[Math.floor(at / TICK_MS) % SPINNER.length] : look.glyph
+
+  return (
+    <Box flexDirection="column" marginTop={style.isText ? 0 : 1}>
+      <Box flexDirection="row" justifyContent="space-between" gap={2}>
+        <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
+          <Text color={look.tone}>{glyph}</Text>
+          <Text wrap="truncate-end" dimColor={!isRunning}>
+            {run.description}
+          </Text>
+        </Box>
+        {isRunning ? (
+          <Box flexDirection="row" gap={1}>
+            <Text>{`done by ~${clockTime(at + remaining)}`}</Text>
+            <Text dimColor>{`·  ~${duration(remaining)}`}</Text>
+          </Box>
+        ) : (
+          <Text dimColor>{`${look.verb} ${duration(elapsed)}`}</Text>
+        )}
+      </Box>
+      {isRunning && (
+        <Box flexDirection="row" gap={2} paddingLeft={2} alignItems="center">
+          {meter(
+            t,
+            `bar-${run.toolUseId}`,
+            progress,
+            `about ${Math.round(progress * 100)}% done`,
+            style,
+          )}
+          <Box flexShrink={1} minWidth={0}>
+            <Text dimColor wrap="truncate-end">
+              {run.activity}
+            </Text>
+          </Box>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+function subagentsSection(
+  t: ElementTable,
+  shown: AgentRun[],
+  at: number,
+  style: Style,
+  maxRows: number,
+) {
+  const { Box, Text } = t
+  const left = Math.max(0, ...shown.map(run => estimate(run, at).remaining))
+  const isRunning = shown.some(run => run.status === 'running')
+  const fit = Math.max(1, Math.floor((maxRows - BAND_CHROME_ROWS) / ROWS_PER_AGENT))
+
+  return section(
+    t,
+    'Subagents',
+    <Box flexDirection="column">
+      {isRunning ? (
+        <Box flexDirection="row" gap={1}>
+          <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
+          <Text dimColor>{`·  in ~${duration(left)}`}</Text>
+        </Box>
+      ) : (
+        <Text color={SUCCESS}>All done</Text>
+      )}
+      {shown.slice(-fit).map(run => agentRow(t, run, at, style))}
+    </Box>,
+    style,
+  )
+}
+
+function handoffSection(
+  $: EngineInterface,
+  t: ElementTable,
+  ready: ReadyHandoff,
+  style: Style,
+  hasHint: boolean,
+) {
+  const { Box, Text, Button } = t
+  const plain = style.isText || undefined
+
+  return section(
+    t,
+    ready.source === 'auto' ? 'Suggested' : 'Next session',
+    <Box
+      key="handoff"
+      flexDirection="row"
+      justifyContent="space-between"
+      gap={2}
+      alignItems="center"
+    >
+      <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
+        <Text bold wrap="truncate-end">
+          {ready.title}
+        </Text>
+        {ready.reason !== '' && (
+          <Text dimColor wrap="truncate-end">
+            {`·  ${ready.reason}`}
+          </Text>
+        )}
+      </Box>
+      <Box flexDirection="row" gap={style.isText ? 3 : 1} flexShrink={0}>
+        <Button
+          key="handoff-start"
+          plain={plain}
+          variant="primary"
+          hotkey="s"
+          label="Start fresh session"
+          onPress={press => startFresh($, ready, press.surface)}
+        />
+        <Button
+          key="handoff-copy"
+          plain={plain}
+          hotkey="c"
+          label="Copy"
+          onPress={press => copyHandoff($, ready, press.surface)}
+        />
+        <Button
+          key="handoff-dismiss"
+          plain={plain}
+          role="dismiss"
+          hotkey="x"
+          label="Dismiss"
+          onPress={() => update($, handoff, () => null)}
+        />
+      </Box>
+    </Box>,
+    { ...style, hasHint, isCentred: true },
+  )
+}
+
 export const register: Register = (on, options) => {
   const showIn = String(options.show_in ?? 'both')
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    startTicker($)
-
-    // Each step stands alone, so one that fails doesn't stop the others.
-    await $.command
-      .register({
-        name: 'handoff',
-        description:
-          'Write a starter prompt for a fresh session; a pill above the prompt starts it',
-        argumentHint: '[focus] | auto on | auto off',
-      })
-      .catch(() => undefined)
-
-    const usage = await $.session.usage().catch(() => undefined)
+    const [, usage] = await Promise.all([
+      $.command
+        .register({
+          name: 'handoff',
+          description:
+            'Write a starter prompt for a fresh session; a pill above the prompt starts it',
+          argumentHint: '[focus] | auto on | auto off',
+        })
+        .catch(() => undefined),
+      $.session.usage().catch(() => undefined),
+    ])
     local.contextPercent = usage?.context.percent ?? 0
 
     return result
   })
 
-  on('session.measure', async ($, e, next) => {
-    if (!(await isActive($, showIn))) return next(e)
-    // How full the context is decides how soon to suggest a fresh session.
+  on('session.measure', ($, e, next) => {
     local.contextPercent = e.context.percent ?? local.contextPercent
-
     return next(e)
   })
 
@@ -401,8 +638,7 @@ export const register: Register = (on, options) => {
     if (e.reason === 'clear') {
       local.turnsSinceCheck = 0
       local.contextPercent = 0
-      await update($, agents, () => [])
-      await update($, handoff, () => null)
+      await Promise.all([update($, agents, () => []), update($, handoff, () => null)])
     }
 
     return next(e)
@@ -412,17 +648,16 @@ export const register: Register = (on, options) => {
     if (!(await isActive($, showIn))) {
       return { text: `session-hud is set to show in the ${showIn} only. Change it under /config.` }
     }
+
     const args = (e.args ?? '').trim()
     const toggle = /^auto\s+(on|off)$/i.exec(args)
-
     if (toggle) {
       const isOn = toggle[1]!.toLowerCase() === 'on'
-      await $.store.set('autoSuggest', isOn)
+      await $.store.set(STORE_AUTO_SUGGEST, isOn)
 
       return { text: `Handoff suggestions are ${isOn ? 'on' : 'off'}.` }
     }
 
-    if (await read($, handoff)) await update($, handoff, () => null)
     await update($, handoff, () => ({ phase: 'writing' as const, source: 'manual' as const }))
     $.clock.after(0, () => void writeHandoff($, args))
 
@@ -432,9 +667,8 @@ export const register: Register = (on, options) => {
   })
 
   on('agent.spawn', async ($, e, next) => {
-    if (!(await isActive($, showIn))) return next(e)
     startTicker($)
-    const at = await $.clock.now()
+    const [at, expected] = await Promise.all([$.clock.now(), expectation($, e.subagentType)])
     const run: AgentRun = {
       toolUseId: e.tool_use_id,
       description: e.description || e.subagentType,
@@ -444,24 +678,28 @@ export const register: Register = (on, options) => {
       status: 'running',
       steps: 0,
       activity: 'Starting',
-      ...(await expectation($, e.subagentType)),
+      ...expected,
     }
+    const withoutRun = (list: AgentRun[]) => list.filter(one => one.toolUseId !== run.toolUseId)
 
-    await update($, agents, list => [...list.filter(one => isShown(one, at)), run].slice(-12))
-    await update($, now, () => at)
+    await Promise.all([
+      update($, agents, list =>
+        [...list.filter(one => isShown(one, at)), run].slice(-MAX_AGENT_ROWS),
+      ),
+      update($, now, () => at),
+    ])
 
     let result: Awaited<ReturnType<typeof next>>
     try {
       result = await next(e)
     } catch (error) {
-      // No subagent started: don't leave a row spinning for the rest of the session.
-      await update($, agents, list => list.filter(one => one.toolUseId !== run.toolUseId))
+      await update($, agents, withoutRun)
       throw error
     }
 
     await update($, agents, list =>
       result.deny !== undefined
-        ? list.filter(one => one.toolUseId !== run.toolUseId)
+        ? withoutRun(list)
         : list.map(one =>
             one.toolUseId === run.toolUseId ? { ...one, agentId: result.agentId } : one,
           ),
@@ -471,28 +709,30 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', async ($, e, next) => {
-    if (!(await isActive($, showIn))) return next(e)
     const agentId = e.agentId
 
     if (agentId !== undefined) {
       const activity = describeCall(e as unknown as Record<string, unknown>)
-      await update($, agents, list => {
-        // A subagent's first calls can land before its spawn resolved its id.
-        const owner =
-          list.find(one => one.agentId === agentId) ??
-          [...list].reverse().find(one => one.status === 'running' && one.agentId === undefined)
+      const [ran] = await Promise.all([
+        next(e),
+        update($, agents, list => {
+          // A subagent's first calls can land before its spawn resolved its id.
+          const owner =
+            list.find(one => one.agentId === agentId) ??
+            [...list].reverse().find(one => one.status === 'running' && one.agentId === undefined)
 
-        return list.map(one =>
-          one === owner ? { ...one, agentId, steps: one.steps + 1, activity } : one,
-        )
-      })
+          return list.map(one =>
+            one === owner ? { ...one, agentId, steps: one.steps + 1, activity } : one,
+          )
+        }),
+      ])
 
-      return next(e)
+      return ran
     }
 
     const ran = await next(e)
 
-    // A foreground Agent call returns when its subagent is finished.
+    // A foreground Agent call returns once its subagent has finished.
     if (isAgentTool(String(e.tool))) {
       await finish(
         $,
@@ -505,7 +745,6 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (!(await isActive($, showIn))) return next(e)
     const result = await next(e)
     const agentId = e.agentId
 
@@ -524,249 +763,70 @@ export const register: Register = (on, options) => {
       )
     }
 
-    const isAuto = (await $.store.get('autoSuggest')) !== false
-    const isBusy = (await read($, agents)).some(run => run.status === 'running')
     const isDue =
-      local.turnsSinceCheck >= 4 && (local.contextPercent >= 30 || local.turnsSinceCheck >= 12)
+      e.reason === 'answer' &&
+      !pending &&
+      local.turnsSinceCheck >= CHECK_AFTER_TURNS &&
+      (local.contextPercent >= CHECK_AT_CONTEXT_PERCENT ||
+        local.turnsSinceCheck >= CHECK_ALWAYS_AFTER_TURNS)
+    if (!isDue) return result
 
-    if (isAuto && isDue && !isBusy && !pending && e.reason === 'answer') {
+    const [autoSuggest, list, active] = await Promise.all([
+      $.store.get(STORE_AUTO_SUGGEST),
+      read($, agents),
+      isActive($, showIn),
+    ])
+    if (autoSuggest !== false && active && !list.some(run => run.status === 'running')) {
       local.turnsSinceCheck = 0
-      $.clock.after(1500, () => void autoCheck($))
+      $.clock.after(CHECK_DELAY_MS, () => void autoCheck($))
     }
 
     return result
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Other mods' sections come first; ours follow, nearer the prompt.
+    // Other mods' sections come first; this one follows, nearer the prompt.
     const above = await next(e)
     if (e.props.hasSurvey || !runsOn(showIn, e.surface)) return above
 
-    const [list, pending] = await Promise.all([
+    // `now` is read so the ticker's writes redraw the band while agents run.
+    const [list, pending, at] = await Promise.all([
       read($, agents),
       read($, handoff),
-      // Read so the ticker's writes redraw the band while agents run.
+      $.clock.now(),
       read($, now),
     ])
-    const at = await $.clock.now()
     const shown = list.filter(run => isShown(run, at))
-
     if (shown.length === 0 && !pending) return above
 
     const t = $.ui.resolve(e)
-    const { Box, Text, Button } = t
-    const isDesktop = e.surface === 'desktop'
-    const cols = Math.max(30, e.props.bodyColumns)
-    const barCells = clamp(Math.floor((cols - LABEL_WIDTH) / 6), 10, 20)
-    const hasAbove = ((above as { children?: unknown[] }).children?.length ?? 0) > 0
+    const { Box, Text } = t
+    const cols = Math.max(MIN_BAND_COLUMNS, e.props.bodyColumns)
+    const style: Style = {
+      isText: e.surface === 'terminal',
+      isNarrow: cols < NARROW_COLUMNS,
+      barCells: clamp(
+        Math.floor((cols - LABEL_WIDTH) / COLUMNS_PER_BAR_CELL),
+        BAR_MIN_CELLS,
+        BAR_MAX_CELLS,
+      ),
+    }
+    // The terminal takes no clicks outside fullscreen: say how to reach the buttons.
+    const hasHint = style.isText && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
+
     const sections: JSX.Element[] = []
-
-    // Every section: its name in a fixed column on the left, its content beside it.
-    // A one-line section with buttons centres its name on them; a list keeps it on the first line.
-    const isTerminal = e.surface === 'terminal'
-    const isNarrow = cols < NARROW_COLUMNS
-    // Without fullscreen the terminal takes no clicks: say once how to reach the buttons.
-    let needsHint = isTerminal && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
-    const plain = isTerminal ? { plain: true as const } : {}
-
-    // Every section: its name in a fixed column on the left (on its own line when narrow),
-    // its content beside it. One with buttons centres its name on them.
-    const section = (label: string, content: JSX.Element, kind: 'list' | 'controls' = 'list') => {
-      const hasHint = kind === 'controls' && needsHint
-      if (hasHint) needsHint = false
-      const isCentred = kind === 'controls' && !hasHint && !isNarrow
-
-      return (
-        <Box
-          flexDirection={isNarrow ? 'column' : 'row'}
-          gap={isNarrow ? 0 : 2}
-          alignItems={isCentred ? 'center' : 'flex-start'}
-        >
-          <Box flexDirection="column" flexShrink={0} {...(isNarrow ? {} : { width: LABEL_WIDTH })}>
-            <Text dimColor>{label}</Text>
-            {hasHint && (
-              <Box key={HINT_KEY}>
-                <Text dimColor italic>
-                  ctrl+x tab
-                </Text>
-              </Box>
-            )}
-          </Box>
-          <Box
-            flexDirection="column"
-            flexGrow={1}
-            flexShrink={1}
-            minWidth={0}
-            paddingLeft={isNarrow ? 2 : 0}
-          >
-            {content}
-          </Box>
-        </Box>
-      )
-    }
-
-    // A rounded SVG bar where the surface draws SVG, a run of blocks in the terminal.
-    const meter = (key: string, fraction: number, fill: string, label: string) => {
-      const f = clamp(fraction, 0, 1)
-
-      // The terminal draws no SVG (its table's Svg renders nothing), so it gets text.
-      if (e.surface !== 'terminal' && 'Svg' in t) {
-        const { Svg } = t
-        const w = barCells * 8
-        const filled = f > 0 ? Math.max(6, Math.round(w * f)) : 0
-        const source =
-          `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="6" viewBox="0 0 ${w} 6">` +
-          `<rect width="${w}" height="6" rx="3" fill="#8b8b8b" fill-opacity="0.25"/>` +
-          (filled ? `<rect width="${filled}" height="6" rx="3" fill="${fill}"/>` : '') +
-          `</svg>`
-
-        return <Svg key={key} source={source} alt={label} width={w} height={6} />
-      }
-
-      const [full, empty] = bar(f, barCells, '━', '─')
-
-      return (
-        <Box flexDirection="row">
-          <Text color={fill}>{full}</Text>
-          <Text dimColor>{empty}</Text>
-        </Box>
-      )
-    }
-
-    if (shown.length > 0) {
-      const running = shown.filter(run => run.status === 'running')
-      const left = Math.max(0, ...shown.map(run => estimate(run, at).remaining))
-      const spin = SPINNER[Math.floor(at / 1000) % SPINNER.length]
-      const rows: JSX.Element[] = [
-        running.length > 0 ? (
-          <Box flexDirection="row" gap={1}>
-            <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
-            <Text dimColor>{`·  in ~${duration(left)}`}</Text>
-          </Box>
-        ) : (
-          <Text color={SUCCESS}>All done</Text>
-        ),
-      ]
-
-      shown.slice(-Math.max(1, Math.floor((e.props.maxRows - 3) / 2))).forEach(run => {
-        const { elapsed, progress, remaining } = estimate(run, at)
-        const isRunning = run.status === 'running'
-        // Braille spinners read as stray dots in a proportional font.
-        const glyph = isRunning ? (isDesktop ? '●' : spin) : run.status === 'done' ? '✓' : '✗'
-        const tone = run.status === 'failed' ? ERROR : run.status === 'done' ? SUCCESS : ACCENT
-
-        rows.push(
-          <Box flexDirection="column" marginTop={isDesktop ? 1 : 0}>
-            <Box flexDirection="row" justifyContent="space-between" gap={2}>
-              <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
-                <Text color={tone}>{glyph}</Text>
-                <Text wrap="truncate-end" dimColor={!isRunning}>
-                  {run.description}
-                </Text>
-              </Box>
-              {isRunning ? (
-                <Box flexDirection="row" gap={1}>
-                  <Text>{`done by ~${clockTime(at + remaining)}`}</Text>
-                  <Text dimColor>{`·  ~${duration(remaining)}`}</Text>
-                </Box>
-              ) : (
-                <Text dimColor>
-                  {run.status === 'done'
-                    ? `finished in ${duration(elapsed)}`
-                    : `stopped after ${duration(elapsed)}`}
-                </Text>
-              )}
-            </Box>
-            {isRunning && (
-              <Box flexDirection="row" gap={2} paddingLeft={2} alignItems="center">
-                {meter(
-                  `bar-${run.toolUseId}`,
-                  progress,
-                  ACCENT,
-                  `about ${Math.round(progress * 100)}% done`,
-                )}
-                <Box flexShrink={1} minWidth={0}>
-                  <Text dimColor wrap="truncate-end">
-                    {run.activity}
-                  </Text>
-                </Box>
-              </Box>
-            )}
-          </Box>,
-        )
-      })
-
-      sections.push(section('Subagents', <Box flexDirection="column">{rows}</Box>))
-    }
-
+    if (shown.length > 0) sections.push(subagentsSection(t, shown, at, style, e.props.maxRows))
     if (pending?.phase === 'writing') {
-      sections.push(section('Next session', <Text dimColor>Writing the handoff prompt…</Text>))
-    }
-
-    if (pending?.phase === 'ready') {
       sections.push(
-        section(
-          pending.source === 'auto' ? 'Suggested' : 'Next session',
-          <Box
-            key="handoff"
-            flexDirection="row"
-            justifyContent="space-between"
-            gap={2}
-            alignItems="center"
-          >
-            <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
-              <Text bold wrap="truncate-end">
-                {pending.title}
-              </Text>
-              {pending.reason !== '' && (
-                <Text dimColor wrap="truncate-end">
-                  {`·  ${pending.reason}`}
-                </Text>
-              )}
-            </Box>
-            <Box flexDirection="row" gap={isTerminal ? 3 : 1} flexShrink={0}>
-              <Button
-                key="handoff-start"
-                {...plain}
-                variant="primary"
-                hotkey="s"
-                label="Start fresh session"
-                onPress={press => startFresh($, pending, press.surface)}
-              />
-              <Button
-                key="handoff-copy"
-                {...plain}
-                hotkey="c"
-                label="Copy"
-                onPress={async press => {
-                  const copied = await $.ui.copy({ text: pending.prompt, surface: press.surface })
-                  $.ui.toast(copied.isCopied ? 'Handoff copied.' : 'Could not reach the clipboard.')
-                }}
-              />
-              <Button
-                key="handoff-dismiss"
-                {...plain}
-                role="dismiss"
-                hotkey="x"
-                label="Dismiss"
-                onPress={() => update($, handoff, () => null)}
-              />
-            </Box>
-          </Box>,
-          'controls',
-        ),
+        section(t, 'Next session', <Text dimColor>Writing the handoff prompt…</Text>, style),
       )
     }
+    if (pending?.phase === 'ready') sections.push(handoffSection($, t, pending, style, hasHint))
 
     return (
       <Box flexDirection="column">
         {above}
-        <Box
-          flexDirection="column"
-          // A blank row between sections, on every surface: easier to scan.
-          gap={1}
-          marginTop={hasAbove ? 1 : 0}
-        >
+        <Box flexDirection="column" gap={1} marginTop={hasContent(above) ? 1 : 0}>
           {sections}
         </Box>
       </Box>

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { CommandInfo, On } from 'claude-code'
-import { frequent, groupOf } from '../hooks/register'
+import { fitChips, frequent, groupOf } from '../hooks/register'
 
 const DAY = 86_400_000
 const NOW = 1_800_000_000_000
@@ -142,7 +142,7 @@ test('/ menu descriptions carry the pin and the count', async ($, on) => {
   })
 
   expect(pinned.description).toBe('★ pinned · Review changed code')
-  expect(used.description).toBe('↻ 1× this month · Run it')
+  expect(used.description).toBe('↻ 1× in 30 days · Run it')
 })
 
 test('built-in commands only count as skills once they have been used as one', () => {
@@ -208,4 +208,14 @@ test('pins still load when /dock cannot be registered', async ($, on) => {
   const ui = await $.ui.mount({ ...band, surface: 'desktop' })
   expect(await ui.find({ key: 'dock-pin-simplify' })).toBeDefined()
   await ui.unmount()
+})
+
+test('the dock keeps the chips that fit, paying for the separator once', () => {
+  const chip = (name: string, isPinned: boolean) => ({ name, label: name, isPinned })
+  const chips = [chip('aaaa', true), chip('bbbbbbbbbb', false), chip('cc', false)]
+
+  // 4+2 for the pin, then 10+2+3 doesn't fit in the 9 left, but 2+2+3 does.
+  expect(fitChips(chips, 15, 2).map(c => c.name)).toEqual(['aaaa', 'cc'])
+  expect(fitChips(chips, 100, 2).map(c => c.name)).toEqual(['aaaa', 'bbbbbbbbbb', 'cc'])
+  expect(fitChips(chips, 3, 2)).toEqual([])
 })

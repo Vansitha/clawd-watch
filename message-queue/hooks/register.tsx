@@ -1,30 +1,30 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface } from 'claude-code'
+import type { ElementTable, EngineInterface, Register, RenderSurface } from 'claude-code'
 
 import type { QueuedMessage } from '../types'
 
 const messages = atom({ plugin: 'message-queue', key: 'messages' } as const, [])
 const isPaused = atom({ plugin: 'message-queue', key: 'isPaused' } as const, false)
 
-const ACCENT = '#d97757'
-/** Width of the section-name column every Overwatch mod shares, in cells. */
+// Shared by every Overwatch mod; keep these identical across them.
 const LABEL_WIDTH = 13
-/** Below this width a section's name goes on its own line, above its content. */
 const NARROW_COLUMNS = 72
-/** Key of the "ctrl+x tab" hint: the first mod to draw it shows it, the others see it and skip. */
 const HINT_KEY = 'overwatch-hint'
-/** Lets the finished turn's last rows land before the next message starts a new one. */
+const HINT_TEXT = 'ctrl+x tab'
+
+const ACCENT = '#d97757'
+/** Columns for a message's number, and for its ↑ ✕ controls. */
+const INDEX_WIDTH = 2
+const CONTROLS_WIDTH = 5
+/** Lets the finished turn's last rows land before the next message starts a new turn. */
 const SEND_DELAY_MS = 300
 
-const QUEUED_NOTICE = 'Queued. Claude will read it after the current task.'
+const AFTER_TASK = 'Claude will read it after the current task.'
+const QUEUED_NOTICE = `Queued. ${AFTER_TASK}`
 const WAITING_NOTE = 'Sent one at a time, each after Claude finishes.'
 const PAUSED_NOTE = 'Paused because you stopped Claude.'
 
 const local = { isWorking: false, isSending: false, nextId: 1 }
-
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? '' : 's'}`
-}
 
 /** Whether a drawn tree already holds an element with this key. */
 function hasKey(node: unknown, key: string): boolean {
@@ -32,6 +32,11 @@ function hasKey(node: unknown, key: string): boolean {
   const element = node as { props?: { key?: unknown }; children?: unknown[] }
 
   return element.props?.key === key || (element.children ?? []).some(c => hasKey(c, key))
+}
+
+/** Whether another mod drew anything above this one. */
+function hasContent(tree: unknown): boolean {
+  return ((tree as { children?: unknown[] }).children?.length ?? 0) > 0
 }
 
 /** Whether the "Show in" setting (both, desktop or terminal) includes a surface. */
@@ -51,6 +56,10 @@ async function isActive($: EngineInterface, showIn: string): Promise<boolean> {
   return surfaces.length === 0 || surfaces.some(surface => runsOn(showIn, surface))
 }
 
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? '' : 's'}`
+}
+
 function firstLine(text: string): string {
   const lines = text.trim().split('\n')
 
@@ -58,9 +67,9 @@ function firstLine(text: string): string {
 }
 
 async function enqueue($: EngineInterface, text: string) {
-  const id = `${Date.now()}-${local.nextId++}`
+  const id = `${await $.clock.now()}-${local.nextId++}`
   const list = await update($, messages, all => [...all, { id, text }])
-  $.ui.toast(`Queued (${list.length}). Claude reads it after the current task.`)
+  $.ui.toast(`Queued (${list.length}). ${AFTER_TASK}`)
 }
 
 /** Removes messages; an empty queue is no longer paused. */
@@ -78,8 +87,8 @@ async function sendNext($: EngineInterface) {
   local.isSending = true
   try {
     await update($, messages, all => all.filter(m => m.id !== first.id))
-    await update($, isPaused, () => false)
     await $.prompt.submit({ text: first.text, asUser: true })
+    await update($, isPaused, () => false)
   } catch {
     // Not sent: put it back at the front rather than lose it.
     await update($, messages, all => [first, ...all])
@@ -89,18 +98,94 @@ async function sendNext($: EngineInterface) {
   }
 }
 
-async function move($: EngineInterface, id: string, by: number) {
+async function moveUp($: EngineInterface, id: string) {
   await update($, messages, all => {
-    const from = all.findIndex(m => m.id === id)
-    const to = from + by
-    if (from < 0 || to < 0 || to >= all.length) return all
+    const index = all.findIndex(m => m.id === id)
+    if (index < 1) return all
 
     const reordered = [...all]
-    const [item] = reordered.splice(from, 1)
-    reordered.splice(to, 0, item as QueuedMessage)
+    ;[reordered[index - 1], reordered[index]] = [all[index]!, all[index - 1]!]
 
     return reordered
   })
+}
+
+/** A band section: its name in the shared left column (above it when narrow), content beside. */
+function section(
+  t: ElementTable,
+  label: string,
+  content: JSX.Element,
+  layout: { isNarrow: boolean; hasHint?: boolean; isCentred?: boolean },
+) {
+  const { Box, Text } = t
+  const { isNarrow, hasHint = false, isCentred = false } = layout
+
+  return (
+    <Box
+      flexDirection={isNarrow ? 'column' : 'row'}
+      gap={isNarrow ? 0 : 2}
+      alignItems={isCentred && !hasHint && !isNarrow ? 'center' : 'flex-start'}
+    >
+      <Box flexDirection="column" flexShrink={0} {...(isNarrow ? {} : { width: LABEL_WIDTH })}>
+        <Text dimColor>{label}</Text>
+        {hasHint && (
+          <Box key={HINT_KEY}>
+            <Text dimColor italic>
+              {HINT_TEXT}
+            </Text>
+          </Box>
+        )}
+      </Box>
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        minWidth={0}
+        paddingLeft={isNarrow ? 2 : 0}
+      >
+        {content}
+      </Box>
+    </Box>
+  )
+}
+
+function messageRow($: EngineInterface, t: ElementTable, m: QueuedMessage, index: number) {
+  const { Box, Text, Button } = t
+
+  return (
+    <Box flexDirection="row" gap={1} alignItems="center">
+      <Box width={INDEX_WIDTH} flexShrink={0}>
+        <Text color={ACCENT}>{`${index + 1}`}</Text>
+      </Box>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        <Text wrap="truncate-end">{firstLine(m.text)}</Text>
+      </Box>
+      <Box
+        flexDirection="row"
+        gap={1}
+        width={CONTROLS_WIDTH}
+        flexShrink={0}
+        justifyContent="flex-end"
+      >
+        {index > 0 && (
+          <Button
+            key={`queue-up-${m.id}`}
+            plain
+            dimColor
+            label="↑"
+            onPress={() => moveUp($, m.id)}
+          />
+        )}
+        <Button
+          key={`queue-remove-${m.id}`}
+          plain
+          dimColor
+          label="✕"
+          onPress={() => removeWhere($, x => x.id === m.id)}
+        />
+      </Box>
+    </Box>
+  )
 }
 
 export const register: Register = (on, options) => {
@@ -185,11 +270,12 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return result
 
     local.isWorking = false
-    if (!(await isActive($, showIn))) return result
+    const [list, paused] = await Promise.all([read($, messages), read($, isPaused)])
+    if (list.length === 0 || !(await isActive($, showIn))) return result
 
     if (e.reason === 'answer') {
-      if (!(await read($, isPaused))) $.clock.after(SEND_DELAY_MS, () => void sendNext($))
-    } else if ((await read($, messages)).length) {
+      if (!paused) $.clock.after(SEND_DELAY_MS, () => void sendNext($))
+    } else {
       // The person stopped the turn: hold the queue until they send it.
       await update($, isPaused, () => true)
     }
@@ -205,80 +291,37 @@ export const register: Register = (on, options) => {
     const [list, paused] = await Promise.all([read($, messages), read($, isPaused)])
     if (list.length === 0) return above
 
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const isTerminal = e.surface === 'terminal'
-    const isNarrow = e.props.bodyColumns < NARROW_COLUMNS
-    const hasAbove = ((above as { children?: unknown[] }).children?.length ?? 0) > 0
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const isText = e.surface === 'terminal'
     // The terminal takes no clicks outside fullscreen: say how to reach the buttons.
-    const hasHint = isTerminal && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
+    const hasHint = isText && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
 
     return (
       <Box flexDirection="column">
         {above}
-        <Box
-          flexDirection={isNarrow ? 'column' : 'row'}
-          gap={isNarrow ? 0 : 2}
-          marginTop={hasAbove ? 1 : 0}
-        >
-          <Box flexDirection="column" flexShrink={0} {...(isNarrow ? {} : { width: LABEL_WIDTH })}>
-            <Text dimColor>{`Queued (${list.length})`}</Text>
-            {hasHint && (
-              <Box key={HINT_KEY}>
-                <Text dimColor italic>
-                  ctrl+x tab
-                </Text>
-              </Box>
-            )}
-          </Box>
-          <Box
-            flexDirection="column"
-            flexGrow={1}
-            flexShrink={1}
-            minWidth={0}
-            paddingLeft={isNarrow ? 2 : 0}
-          >
-            {list.map((m, index) => (
-              <Box flexDirection="row" gap={1} alignItems="center">
-                <Box width={2} flexShrink={0}>
-                  <Text color={ACCENT}>{`${index + 1}`}</Text>
-                </Box>
-                <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                  <Text wrap="truncate-end">{firstLine(m.text)}</Text>
-                </Box>
-                <Box flexDirection="row" gap={1} width={5} flexShrink={0} justifyContent="flex-end">
-                  {index > 0 && (
-                    <Button
-                      key={`queue-up-${m.id}`}
-                      plain
-                      dimColor
-                      label="↑"
-                      onPress={() => move($, m.id, -1)}
-                    />
-                  )}
+        <Box flexDirection="column" marginTop={hasContent(above) ? 1 : 0}>
+          {section(
+            t,
+            `Queued (${list.length})`,
+            <Box flexDirection="column">
+              {list.map((m, index) => messageRow($, t, m, index))}
+              <Box flexDirection="row" gap={2} alignItems="center" paddingLeft={INDEX_WIDTH + 1}>
+                <Text dimColor>{paused ? PAUSED_NOTE : WAITING_NOTE}</Text>
+                {paused && (
                   <Button
-                    key={`queue-remove-${m.id}`}
-                    plain
-                    dimColor
-                    label="✕"
-                    onPress={() => removeWhere($, x => x.id === m.id)}
+                    key="queue-send"
+                    plain={isText || undefined}
+                    variant="primary"
+                    hotkey="n"
+                    label="Send next"
+                    onPress={() => sendNext($)}
                   />
-                </Box>
+                )}
               </Box>
-            ))}
-            <Box flexDirection="row" gap={2} alignItems="center" paddingLeft={3}>
-              <Text dimColor>{paused ? PAUSED_NOTE : WAITING_NOTE}</Text>
-              {paused && (
-                <Button
-                  key="queue-send"
-                  {...(isTerminal ? { plain: true as const } : {})}
-                  variant="primary"
-                  hotkey="n"
-                  label="Send next"
-                  onPress={() => sendNext($)}
-                />
-              )}
-            </Box>
-          </Box>
+            </Box>,
+            { isNarrow: e.props.bodyColumns < NARROW_COLUMNS, hasHint },
+          )}
         </Box>
       </Box>
     )

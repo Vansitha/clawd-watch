@@ -167,3 +167,16 @@ test('a message that fails to send goes back to the front of the queue', async (
   expect(await ui.find({ type: 'Text', text: 'keep me' })).toBeDefined()
   await ui.unmount()
 })
+
+test('a failed "Send next" keeps the queue paused, with the button still there', async ($, on) => {
+  engine(on, { failSubmit: true })
+  await $.turn.start({ text: 'build it', turnId: 't1' })
+  await $.prompt.submit(typed('keep me', true))
+  await $.turn.complete(finished('aborted'))
+
+  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  await ui.press({ key: 'queue-send' })
+  expect(await ui.find({ type: 'Text', text: 'keep me' })).toBeDefined()
+  expect(await ui.find({ key: 'queue-send' })).toBeDefined()
+  await ui.unmount()
+})

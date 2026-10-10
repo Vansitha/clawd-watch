@@ -123,7 +123,7 @@ Your pinned skills and your most-used ones, one click away.
 
   Click ☆ to pin a skill, or click a name to use it. Where the app can't show a side pane, the lists open inside the panel instead.
 - `/dock pin <skill>` and `/dock unpin <skill>` pin from the prompt.
-- In the `/` menu, pinned skills say `★ pinned` and used ones say how often you used them this month.
+- In the `/` menu, pinned skills say `★ pinned` and used ones say how often you used them in the last 30 days.
 
 Built-in skills such as `simplify` look like ordinary commands until you use them once. After that they show up in the lists.
 
@@ -153,6 +153,12 @@ Each mod is a folder with a manifest (`.claude-plugin/plugin.json`), a hooks mod
 for mod in session-hud message-queue skill-dock; do
   claude plugin validate $mod && claude plugin test $mod
 done
+```
+
+`tests/install.test.sh` checks the installer: it runs both of its settings editors (Node and Python) on the same awkward `settings.json` files and checks they agree.
+
+```sh
+bash tests/install.test.sh
 ```
 
 Load a mod with `claude --plugin-dir <folder>` while you work on it: it reloads whenever you save.
