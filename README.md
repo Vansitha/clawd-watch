@@ -1,5 +1,7 @@
 # claude-mods
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Three small mods that make Claude Code easier to work with: see when your subagents will finish, queue messages for after Claude is done, and keep your favourite skills one click away.
 
 ![claude-mods in the Claude desktop app](docs/preview.png)
@@ -14,7 +16,9 @@ Each mod adds a section to the panel above the prompt. The sections share one la
 
 ## Install
 
-On macOS or Linux:
+**Requirements:** a Claude Code build with mods (plugins of function hooks). These were built against Claude Code 2.1.288. The mods API is in early access and may change between releases.
+
+On macOS or Linux, run:
 
 ```sh
 git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
@@ -25,14 +29,16 @@ Then quit and reopen the Claude desktop app, or start a new `claude` session. Ru
 
 The installer adds the three mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. It keeps everything else in that file and saves the old one as `settings.json.bak`.
 
-To try them in one terminal session without installing:
+To try them in one terminal session without changing your settings, skip `install.sh` and run:
 
 ```sh
 cd ~/.claude/mods/claude-mods
 claude --plugin-dir session-hud --plugin-dir message-queue --plugin-dir skill-dock
 ```
 
-**Requirements:** a Claude Code build with mods (plugins of function hooks). These were built against Claude Code 2.1.288. The mods API is in early access and may change between releases.
+On Windows, clone the repo anywhere and add the three mod folders to `CLAUDE_CODE_PLUGIN_DIRS` in `%USERPROFILE%\.claude\settings.json` yourself, separated by `;`. `install.sh` doesn't run on Windows.
+
+To uninstall, remove the three paths from `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, then delete `~/.claude/mods/claude-mods`.
 
 ## session-hud
 
@@ -127,3 +133,9 @@ done
 ```
 
 Load a mod with `claude --plugin-dir <folder>` while you work on it: it reloads whenever you save.
+
+Issues and pull requests are welcome.
+
+## License
+
+[MIT](LICENSE)
