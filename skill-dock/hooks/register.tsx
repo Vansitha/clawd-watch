@@ -9,12 +9,12 @@ const skills = atom({ plugin: 'skill-dock', key: 'skills' } as const, [])
 const isInline = atom({ plugin: 'skill-dock', key: 'isInline' } as const, false)
 
 const PANE = 'skill-dock'
-// The width of the section-name column every claude-mods band shares, in cells.
+// The width of the section-name column every Overwatch mod shares, in cells.
 const LABEL_WIDTH = 13
 // Narrower than this, a section's name goes on its own line above its content.
 const NARROW_COLUMNS = 72
 // The "ctrl+x tab" hint's key: the first mod in the band to draw it shows it, the rest see it.
-const HINT_KEY = 'claude-mods-hint'
+const HINT_KEY = 'overwatch-hint'
 
 // isActive is false in a session on a surface the "Show in" setting leaves out.
 const local = { isActive: true }

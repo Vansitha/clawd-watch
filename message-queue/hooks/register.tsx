@@ -7,12 +7,12 @@ const messages = atom({ plugin: 'message-queue', key: 'messages' } as const, [])
 const isPaused = atom({ plugin: 'message-queue', key: 'isPaused' } as const, false)
 
 const ACCENT = '#d97757'
-// The width of the section-name column every claude-mods band shares, in cells.
+// The width of the section-name column every Overwatch mod shares, in cells.
 const LABEL_WIDTH = 13
 // Narrower than this, a section's name goes on its own line above its content.
 const NARROW_COLUMNS = 72
 // The "ctrl+x tab" hint's key: the first mod in the band to draw it shows it, the rest see it.
-const HINT_KEY = 'claude-mods-hint'
+const HINT_KEY = 'overwatch-hint'
 
 /** Whether a drawn tree already holds an element with this key. */
 function hasKey(node: unknown, key: string): boolean {

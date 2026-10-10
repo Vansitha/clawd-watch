@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the claude-mods mods for every Claude Code session (terminal and desktop app):
+# Installs the Overwatch mods for every Claude Code session (terminal and desktop app):
 # keeps a clone of this repo and lists each mod in CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json.
 #
 #   ./install.sh                  install, or update an existing install
@@ -9,11 +9,11 @@
 #   ./install.sh --uninstall      remove the mods from settings.json (the clone stays)
 #
 # Without --only, a person running it is asked; otherwise the last choice is kept.
-# Set CLAUDE_MODS_DIR to keep the clone somewhere other than ~/.claude/mods/claude-mods.
+# Set OVERWATCH_DIR to keep the clone somewhere other than ~/.claude/mods/overwatch.
 # Safe to run again: it never adds a path twice and backs settings.json up first.
 set -euo pipefail
 
-REPO_URL="https://github.com/Vansitha/claude-mods.git"
+REPO_URL="https://github.com/Vansitha/overwatch.git"
 MODS="session-hud message-queue skill-dock"
 SETTINGS="$HOME/.claude/settings.json"
 
@@ -56,7 +56,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
 if [ -n "$here" ] && [ -f "$here/session-hud/.claude-plugin/plugin.json" ]; then
   dir="$here"
 else
-  dir="${CLAUDE_MODS_DIR:-$HOME/.claude/mods/claude-mods}"
+  dir="${OVERWATCH_DIR:-${CLAUDE_MODS_DIR:-$HOME/.claude/mods/overwatch}}"
 fi
 
 if [ "$mode" = "install" ]; then
@@ -116,7 +116,11 @@ try {
 settings.env = settings.env || {};
 let list = (settings.env.CLAUDE_CODE_PLUGIN_DIRS || "").split(":").filter(Boolean);
 const paths = given.split(":");
-list = mode === "install" ? [...list, ...paths.filter(p => !list.includes(p))] : list.filter(p => !paths.includes(p));
+// Another copy of one of these mods (an install made before the project was renamed) would
+// load the same mod twice: drop it, keeping the paths being installed.
+const mods = names.split(" ");
+const isOtherCopy = p => !paths.includes(p) && mods.includes(p.split("/").pop());
+list = mode === "install" ? [...list.filter(p => !isOtherCopy(p)), ...paths.filter(p => !list.includes(p))] : list.filter(p => !paths.includes(p));
 if (list.length) settings.env.CLAUDE_CODE_PLUGIN_DIRS = list.join(":");
 else delete settings.env.CLAUDE_CODE_PLUGIN_DIRS;
 if (!Object.keys(settings.env).length) delete settings.env;
@@ -143,7 +147,12 @@ if os.path.exists(file) and os.path.getsize(file):
 env = settings.setdefault("env", {})
 items = [p for p in env.get("CLAUDE_CODE_PLUGIN_DIRS", "").split(":") if p]
 paths = given.split(":")
-items = items + [p for p in paths if p not in items] if mode == "install" else [p for p in items if p not in paths]
+# Another copy of one of these mods (an install made before the project was renamed) would
+# load the same mod twice: drop it, keeping the paths being installed.
+mods = names.split()
+def other_copy(p):
+    return p not in paths and p.rstrip("/").split("/")[-1] in mods
+items = [p for p in items if not other_copy(p)] + [p for p in paths if p not in items] if mode == "install" else [p for p in items if p not in paths]
 if items:
     env["CLAUDE_CODE_PLUGIN_DIRS"] = ":".join(items)
 else:

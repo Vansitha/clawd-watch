@@ -1,10 +1,10 @@
-# claude-mods
+# Overwatch
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Three small mods that make Claude Code easier to work with: see when your subagents will finish, queue messages for after Claude is done, and keep your favourite skills one click away.
+Overwatch keeps an eye on Claude Code while it works. Three small mods: see when your subagents will finish, queue messages for after Claude is done, and keep your favourite skills one click away.
 
-![claude-mods in the Claude desktop app](docs/preview.png)
+![Overwatch in the Claude desktop app](docs/preview.png)
 
 | Mod | What it adds |
 | --- | --- |
@@ -23,7 +23,7 @@ Each mod adds a section to the panel above the prompt. The sections share one la
 Paste this into Claude Code:
 
 ```
-Install claude-mods for me: clone https://github.com/Vansitha/claude-mods into ~/.claude/mods/claude-mods and follow the INSTALL.md inside it.
+Install Overwatch for me: clone https://github.com/Vansitha/overwatch into ~/.claude/mods/overwatch and follow the INSTALL.md inside it.
 ```
 
 Claude asks whether you want the mods in the desktop app, the terminal or both. Then it clones the repo, runs the installer (or does the same by hand on Windows), checks each mod, and tells you what to do next. It also asks before changing any keys. The steps it follows are in [INSTALL.md](INSTALL.md).
@@ -31,8 +31,8 @@ Claude asks whether you want the mods in the desktop app, the terminal or both. 
 ### By hand (macOS or Linux)
 
 ```sh
-git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
-~/.claude/mods/claude-mods/install.sh
+git clone https://github.com/Vansitha/overwatch.git ~/.claude/mods/overwatch
+~/.claude/mods/overwatch/install.sh
 ```
 
 The installer asks where the mods should run: the desktop app and the terminal, the desktop app only, or the terminal only. Skip the question with `--only desktop`, `--only terminal` or `--only both`.
@@ -43,12 +43,14 @@ The installer adds the three mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/set
 
 | To | Run |
 | --- | --- |
-| Update | `~/.claude/mods/claude-mods/install.sh` (it pulls the latest version first and keeps your choices) |
-| Change where they run | `~/.claude/mods/claude-mods/install.sh --only desktop` (or `terminal`, `both`), or **Show in** under `/config` |
-| Uninstall | `~/.claude/mods/claude-mods/install.sh --uninstall` |
-| Try them in one terminal session without changing your settings | `cd ~/.claude/mods/claude-mods && claude --plugin-dir session-hud --plugin-dir message-queue --plugin-dir skill-dock` |
+| Update | `~/.claude/mods/overwatch/install.sh` (it pulls the latest version first and keeps your choices) |
+| Change where they run | `~/.claude/mods/overwatch/install.sh --only desktop` (or `terminal`, `both`), or **Show in** under `/config` |
+| Uninstall | `~/.claude/mods/overwatch/install.sh --uninstall` |
+| Try them in one terminal session without changing your settings | `cd ~/.claude/mods/overwatch && claude --plugin-dir session-hud --plugin-dir message-queue --plugin-dir skill-dock` |
 
 On Windows, follow [INSTALL.md](INSTALL.md) step 3b, or ask Claude to.
+
+Installed it back when it was called claude-mods? Install Overwatch as above: the installer replaces the old copy in your settings. Then delete `~/.claude/mods/claude-mods`.
 
 ## session-hud
 
@@ -127,7 +129,7 @@ Built-in skills such as `simplify` look like ordinary commands until you use the
 
 ## Where it works
 
-![claude-mods in the terminal](docs/terminal.png)
+![Overwatch in the terminal](docs/terminal.png)
 
 In the terminal, the same panel is drawn in text:
 

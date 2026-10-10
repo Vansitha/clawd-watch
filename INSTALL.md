@@ -1,11 +1,11 @@
-# Installing claude-mods
+# Installing Overwatch
 
-These steps are written so an AI coding agent such as Claude Code can install claude-mods for someone, start to finish. People can follow them too.
+These steps are written so an AI coding agent such as Claude Code can install Overwatch for someone, start to finish. People can follow them too.
 
 **To install with Claude**, paste this into Claude Code:
 
 ```
-Install claude-mods for me: clone https://github.com/Vansitha/claude-mods into ~/.claude/mods/claude-mods and follow the INSTALL.md inside it.
+Install Overwatch for me: clone https://github.com/Vansitha/overwatch into ~/.claude/mods/overwatch and follow the INSTALL.md inside it.
 ```
 
 ## Rules for the agent
@@ -34,26 +34,26 @@ If `git` is missing, ask the person to install it and stop.
 
 ## 2. Get the code
 
-If `~/.claude/mods/claude-mods` already exists, update it:
+If `~/.claude/mods/overwatch` already exists, update it:
 
 ```sh
-git -C ~/.claude/mods/claude-mods pull --ff-only
+git -C ~/.claude/mods/overwatch pull --ff-only
 ```
 
 Otherwise clone it:
 
 ```sh
-git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
+git clone https://github.com/Vansitha/overwatch.git ~/.claude/mods/overwatch
 ```
 
-On Windows the folder is `%USERPROFILE%\.claude\mods\claude-mods`.
+On Windows the folder is `%USERPROFILE%\.claude\mods\overwatch`.
 
 ## 3a. Install on macOS or Linux
 
 Use the person's answer from the rules above:
 
 ```sh
-~/.claude/mods/claude-mods/install.sh --only both       # or: --only desktop, --only terminal
+~/.claude/mods/overwatch/install.sh --only both       # or: --only desktop, --only terminal
 ```
 
 Always pass `--only` when you run it. Without it, the installer asks the question itself, but only when someone is typing at a terminal.
@@ -92,9 +92,9 @@ If it exits with an error, show the person the output. The usual causes:
 2. Set `env.CLAUDE_CODE_PLUGIN_DIRS` to include these three absolute paths, separated by `;` (Windows' path-list separator):
 
    ```
-   %USERPROFILE%\.claude\mods\claude-mods\session-hud
-   %USERPROFILE%\.claude\mods\claude-mods\message-queue
-   %USERPROFILE%\.claude\mods\claude-mods\skill-dock
+   %USERPROFILE%\.claude\mods\overwatch\session-hud
+   %USERPROFILE%\.claude\mods\overwatch\message-queue
+   %USERPROFILE%\.claude\mods\overwatch\skill-dock
    ```
 
    Write the real expanded paths (`C:\Users\<name>\...`), not `%USERPROFILE%`. If the variable already has paths, keep them and add these after a `;`. Keep every other key in the file.
@@ -144,17 +144,21 @@ Some terminals send Shift+Enter as a plain Enter. If it doesn't work there, sugg
 
 ## Changing where the mods run
 
-Run `~/.claude/mods/claude-mods/install.sh --only desktop` (or `terminal`, `both`), then start a new session. People can also change **Show in** for each mod under `/config` in Claude Code.
+Run `~/.claude/mods/overwatch/install.sh --only desktop` (or `terminal`, `both`), then start a new session. People can also change **Show in** for each mod under `/config` in Claude Code.
+
+## Coming from claude-mods
+
+Overwatch used to be called claude-mods. If `~/.claude/mods/claude-mods` exists, install Overwatch as above: the installer replaces the old paths in `settings.json` with the new ones and keeps the person's settings. Then the old folder can go: `rm -rf ~/.claude/mods/claude-mods`.
 
 ## Updating
 
-Run `~/.claude/mods/claude-mods/install.sh` again. It keeps the person's choice of where the mods run. It pulls the latest version first, unless the clone has local changes. Then start a new session.
+Run `~/.claude/mods/overwatch/install.sh` again. It keeps the person's choice of where the mods run. It pulls the latest version first, unless the clone has local changes. Then start a new session.
 
 ## Uninstalling
 
 ```sh
-~/.claude/mods/claude-mods/install.sh --uninstall   # removes the mods and their settings from settings.json
-rm -rf ~/.claude/mods/claude-mods                   # optional: deletes the files
+~/.claude/mods/overwatch/install.sh --uninstall   # removes the mods and their settings from settings.json
+rm -rf ~/.claude/mods/overwatch                   # optional: deletes the files
 ```
 
 On Windows, remove the three paths from `env.CLAUDE_CODE_PLUGIN_DIRS` and the three mods' entries from `pluginConfigs` by hand, then delete the folder.
