@@ -2,7 +2,12 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { AgentRun } from '../types'
 import { describeCall, estimate } from '../hooks/register'
 
-const usage = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+const usage = {
+  input_tokens: 1,
+  output_tokens: 1,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+}
 
 const band = (bodyColumns = 120) => ({
   plugin: 'session-hud',
@@ -18,6 +23,7 @@ const band = (bodyColumns = 120) => ({
 })
 
 test('the 5-hour meter shows above the prompt once a reading arrives', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Box } = $.ui.resolve(e)
     return <Box key="engine" />
@@ -31,7 +37,9 @@ test('the 5-hour meter shows above the prompt once a reading arrives', async ($,
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...band(), surface })
-    expect(await ui.find({ type: 'Text', text: /43%.*resets/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '43%' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /resets/ })).toBeDefined()
+    if (surface === 'desktop') expect(await ui.find({ type: 'Svg' })).toBeDefined()
     // What other mods drew above the prompt stays, above the meter.
     expect(await ui.find({ key: 'engine' })).toBeDefined()
     await ui.unmount()
@@ -80,7 +88,7 @@ test('/handoff writes a starter prompt and the pill clears and starts it', async
 })
 
 test('a running subagent shows its task, then finishes', async ($, on) => {
-  mock.clock(on, { now: 2_000_000 })
+  const clock = mock.clock(on, { now: 2_000_000 })
   mock.store(on)
   on('agent.spawn', () => ({ model: 'm', agentId: 'agent-1' }))
   on('turn.complete', () => ({ text: '' }))
@@ -102,12 +110,17 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const view = await $.ui.mount({ ...band(), surface })
-    expect(await view.find({ type: 'Text', text: '1 subagent working' })).toBeDefined()
+    expect(await view.find({ type: 'Text', text: 'Subagents' })).toBeDefined()
+    expect(await view.find({ type: 'Text', text: /^1 running/ })).toBeDefined()
     expect(await view.find({ type: 'Text', text: /Find auth handlers/ })).toBeDefined()
     await view.unmount()
   }
 
   const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+
+  // Elapsed time follows the clock even when nothing else changes.
+  await clock.advance(65_000)
+  expect(await ui.find({ type: 'Text', text: /^1:05/ })).toBeDefined()
 
   await $.turn.complete({
     answer: 'found',
@@ -117,7 +130,8 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
     agentId: 'agent-1',
     reason: 'answer',
   })
-  expect(await ui.find({ type: 'Text', text: 'Subagents finished' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1 done' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^done in/ })).toBeDefined()
   await ui.unmount()
 })
 

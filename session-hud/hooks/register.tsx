@@ -15,13 +15,25 @@ const HISTORY_SIZE = 60
 // An auto suggestion goes stale after this many further turns.
 const STALE_TURNS = 3
 
+// What a subagent of each type takes before the mod has seen any finish.
 const DEFAULT_MS: Record<string, number> = {
-  Explore: 60_000,
-  Plan: 90_000,
-  'general-purpose': 120_000,
+  Explore: 90_000,
+  Plan: 120_000,
+  'general-purpose': 300_000,
 }
-const DEFAULT_STEPS = 12
+const DEFAULT_STEPS: Record<string, number> = {
+  Explore: 20,
+  Plan: 15,
+  'general-purpose': 40,
+}
 const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+// Colors that read on both light and dark backgrounds.
+const ACCENT = '#d97757'
+const SUCCESS = '#5fa865'
+const WARNING = '#d9a03f'
+const ERROR = '#d9534f'
+const NEUTRAL = '#8f98a3'
 
 type Sample = { type: string; ms: number; steps: number }
 
@@ -96,13 +108,6 @@ function clockTime(ms: number): string {
   }
 }
 
-function fit(text: string, width: number): string {
-  if (width <= 0) return ''
-  if (text.length <= width) return text.padEnd(width)
-
-  return `${text.slice(0, Math.max(0, width - 1))}…`
-}
-
 function bar(fraction: number, width: number, full: string, empty: string): [string, string] {
   const filled = Math.round(clamp(fraction, 0, 1) * width)
 
@@ -153,7 +158,8 @@ export function estimate(run: AgentRun, at: number) {
   const elapsed = Math.max(0, (run.endedAt ?? at) - run.startedAt)
   if (run.status !== 'running') return { elapsed, progress: 1, remaining: 0 }
 
-  const raw = 0.6 * (elapsed / run.expectedMs) + 0.4 * (run.steps / run.expectedSteps)
+  // Time leads; steps only nudge, so a busy agent doesn't jump to the end early.
+  const raw = 0.75 * (elapsed / run.expectedMs) + 0.25 * Math.min(1, run.steps / run.expectedSteps)
   // Linear until 85%, then it eases toward 97% instead of claiming it is done.
   const eased = raw < 0.85 ? raw : 0.85 + 0.12 * (1 - Math.exp(-(raw - 0.85) * 2.5))
   const progress = clamp(eased, 0.01, 0.97)
@@ -172,7 +178,20 @@ function isAgentTool(tool: string): boolean {
 }
 
 // The module's own counters: they start over when the mod reloads.
-const local = { contextPercent: 0, turnsSinceCheck: 0, isChecking: false, wasLive: false }
+const local = {
+  contextPercent: 0,
+  turnsSinceCheck: 0,
+  isChecking: false,
+  wasLive: false,
+  isTicking: false,
+}
+
+/** Starts the once-a-second redraw that keeps elapsed times and ETAs moving. */
+function startTicker($: EngineInterface) {
+  if (local.isTicking) return
+  local.isTicking = true
+  $.clock.every(1000, () => void tick($))
+}
 
 async function history($: EngineInterface): Promise<Sample[]> {
   const stored = await $.store.get('agentHistory')
@@ -190,7 +209,7 @@ async function expectation($: EngineInterface, type: string) {
         expectedMs: median(basis.map(sample => sample.ms)),
         expectedSteps: Math.max(1, median(basis.map(sample => sample.steps))),
       }
-    : { expectedMs: DEFAULT_MS[type] ?? 90_000, expectedSteps: DEFAULT_STEPS }
+    : { expectedMs: DEFAULT_MS[type] ?? 180_000, expectedSteps: DEFAULT_STEPS[type] ?? 25 }
 }
 
 async function finish(
@@ -292,9 +311,12 @@ async function startFresh($: EngineInterface, ready: Handoff, surface: RenderSur
     await $.command.run({ command: 'clear' })
   } catch {
     await update($, handoff, () => ready)
-    $.ui.toast('Could not clear the session; the handoff is on your clipboard. Run /clear and paste it.', {
-      timeoutMs: 8000,
-    })
+    $.ui.toast(
+      'Could not clear the session; the handoff is on your clipboard. Run /clear and paste it.',
+      {
+        timeoutMs: 8000,
+      },
+    )
     return
   }
 
@@ -304,18 +326,22 @@ async function startFresh($: EngineInterface, ready: Handoff, surface: RenderSur
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    startTicker($)
 
-    await $.command.register({
-      name: 'handoff',
-      description: 'Write a starter prompt for a fresh session; a pill above the prompt starts it',
-      argumentHint: '[focus] | auto on | auto off',
-    })
+    // Each step stands alone, so one that fails doesn't stop the others.
+    await $.command
+      .register({
+        name: 'handoff',
+        description: 'Write a starter prompt for a fresh session; a pill above the prompt starts it',
+        argumentHint: '[focus] | auto on | auto off',
+      })
+      .catch(() => undefined)
 
-    const usage = await $.session.usage()
-    local.contextPercent = usage.context.percent ?? 0
-    await saveRate($, usage.rateLimits)
-
-    $.clock.every(1000, () => void tick($))
+    const usage = await $.session.usage().catch(() => undefined)
+    if (usage) {
+      local.contextPercent = usage.context.percent ?? 0
+      await saveRate($, usage.rateLimits)
+    }
 
     return result
   })
@@ -353,10 +379,13 @@ export const register: Register = on => {
     await update($, handoff, () => ({ phase: 'writing' as const, source: 'manual' as const }))
     $.clock.after(0, () => void writeHandoff($, args))
 
-    return { text: 'Writing a handoff. A pill to start the fresh session will appear above the prompt.' }
+    return {
+      text: 'Writing a handoff. A pill to start the fresh session will appear above the prompt.',
+    }
   })
 
   on('agent.spawn', async ($, e, next) => {
+    startTicker($)
     const at = await $.clock.now()
     const run: AgentRun = {
       toolUseId: e.tool_use_id,
@@ -433,12 +462,15 @@ export const register: Register = on => {
     const pending = await read($, handoff)
     if (pending?.phase === 'ready' && pending.source === 'auto') {
       const turnsSince = pending.turnsSince + 1
-      await update($, handoff, () => (turnsSince >= STALE_TURNS ? null : { ...pending, turnsSince }))
+      await update($, handoff, () =>
+        turnsSince >= STALE_TURNS ? null : { ...pending, turnsSince },
+      )
     }
 
     const isAuto = (await $.store.get('autoSuggest')) !== false
     const isBusy = (await read($, agents)).some(run => run.status === 'running')
-    const isDue = local.turnsSinceCheck >= 4 && (local.contextPercent >= 30 || local.turnsSinceCheck >= 12)
+    const isDue =
+      local.turnsSinceCheck >= 4 && (local.contextPercent >= 30 || local.turnsSinceCheck >= 12)
 
     if (isAuto && isDue && !isBusy && !pending && e.reason === 'answer') {
       local.turnsSinceCheck = 0
@@ -453,143 +485,189 @@ export const register: Register = on => {
     const above = await next(e)
     if (e.props.hasSurvey) return above
 
-    const [rate, list, tickAt, pending] = await Promise.all([
+    const [rate, list, pending] = await Promise.all([
       read($, fiveHour),
       read($, agents),
-      read($, now),
       read($, handoff),
+      // Read so the ticker's writes redraw the band while agents run.
+      read($, now),
     ])
-    const at = Math.max(tickAt, ...list.map(run => run.endedAt ?? run.startedAt))
+    const at = await $.clock.now()
     const shown = list.filter(run => isShown(run, at))
 
     if (!rate && shown.length === 0 && !pending) return above
 
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const cols = Math.max(20, e.props.bodyColumns)
-    const rows: JSX.Element[] = []
+    const t = $.ui.resolve(e)
+    const { Box, Text, Button } = t
+    const isDesktop = e.surface === 'desktop'
+    const cols = Math.max(30, e.props.bodyColumns)
+    const barCells = clamp(Math.floor(cols / 6), 10, 22)
+    const sections: JSX.Element[] = []
+
+    // A rounded SVG bar where the surface draws SVG, a run of blocks in the terminal.
+    const meter = (key: string, fraction: number, fill: string, label: string) => {
+      const f = clamp(fraction, 0, 1)
+
+      if ('Svg' in t) {
+        const { Svg } = t
+        const w = barCells * 8
+        const filled = f > 0 ? Math.max(6, Math.round(w * f)) : 0
+        const source =
+          `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="6" viewBox="0 0 ${w} 6">` +
+          `<rect width="${w}" height="6" rx="3" fill="#8b8b8b" fill-opacity="0.25"/>` +
+          (filled ? `<rect width="${filled}" height="6" rx="3" fill="${fill}"/>` : '') +
+          `</svg>`
+
+        return <Svg key={key} source={source} alt={label} width={w} height={6} />
+      }
+
+      const [full, empty] = bar(f, barCells, '━', '─')
+
+      return (
+        <Box flexDirection="row">
+          <Text color={fill}>{full}</Text>
+          <Text dimColor>{empty}</Text>
+        </Box>
+      )
+    }
 
     if (shown.length > 0) {
       const running = shown.filter(run => run.status === 'running')
-      const estimates = shown.map(run => estimate(run, at))
-      const left = Math.max(0, ...estimates.map(one => one.remaining))
-      const done = shown.length - running.length
+      const left = Math.max(0, ...shown.map(run => estimate(run, at).remaining))
       const spin = SPINNER[Math.floor(at / 1000) % SPINNER.length]
-
-      rows.push(
-        <Box flexDirection="row">
-          <Text color="magenta" bold>
-            {running.length ? '◆ ' : '◇ '}
-          </Text>
-          <Text bold>
-            {running.length
-              ? `${running.length} subagent${running.length === 1 ? '' : 's'} working`
-              : 'Subagents finished'}
-          </Text>
+      const finished = shown.length - running.length
+      const summary = running.length
+        ? [
+            `${running.length} running`,
+            ...(finished ? [`${finished} done`] : []),
+            `~${duration(left)} left`,
+            `done ≈ ${clockTime(at + left)}`,
+          ]
+        : [`${finished} done`]
+      const rows: JSX.Element[] = [
+        <Box flexDirection="row" gap={2}>
+          <Text bold>Subagents</Text>
           <Text dimColor wrap="truncate-end">
-            {` · ${done}/${shown.length} done`}
-            {running.length ? ` · ~${duration(left)} left · done ≈ ${clockTime(at + left)}` : ''}
+            {summary.join('  ·  ')}
           </Text>
         </Box>,
-      )
+      ]
 
-      const isWide = cols >= 72
-      const hasBar = cols >= 52
-      const nameWidth = clamp(Math.floor(cols * 0.28), 12, 32)
-      const typeWidth = 10
-      const room = Math.max(1, e.props.maxRows - 1 - (pending ? 1 : 0) - (rate ? 1 : 0))
-
-      shown.slice(-room).forEach(run => {
+      shown.slice(-Math.max(1, Math.floor((e.props.maxRows - 3) / 2))).forEach(run => {
         const { elapsed, progress, remaining } = estimate(run, at)
-        const glyph = run.status === 'running' ? spin : run.status === 'done' ? '✓' : '✗'
-        const [full, empty] = bar(progress, 10, '▰', '▱')
-        const tail = run.status === 'running' ? `~${duration(remaining)} left` : `in ${duration(elapsed)}`
-        const used = 4 + nameWidth + typeWidth + (hasBar ? 16 : 0) + 7 + tail.length + 2
+        const isRunning = run.status === 'running'
+        const glyph = isRunning ? spin : run.status === 'done' ? '✓' : '✗'
+        const tone = run.status === 'failed' ? ERROR : run.status === 'done' ? SUCCESS : ACCENT
+        const percent = Math.round(progress * 100)
+        const timing = isRunning
+          ? `${stopwatch(elapsed)}  ·  ~${duration(remaining)} left`
+          : run.status === 'done'
+            ? `done in ${duration(elapsed)}`
+            : `stopped after ${duration(elapsed)}`
 
         rows.push(
-          <Box flexDirection="row">
-            <Text color={run.status === 'failed' ? 'red' : 'magenta'}>{`  ${glyph} `}</Text>
-            <Text>{fit(run.description, nameWidth)}</Text>
-            <Text dimColor>{fit(` ${run.type}`, typeWidth)}</Text>
-            {hasBar && <Text color={run.status === 'failed' ? 'red' : 'magenta'}>{` ${full}`}</Text>}
-            {hasBar && <Text dimColor>{`${empty} ${String(Math.round(progress * 100)).padStart(3)}%`}</Text>}
-            <Text dimColor>{` ${stopwatch(elapsed).padStart(5)} · ${tail}`}</Text>
-            {isWide && cols - used > 8 && (
-              <Text dimColor italic wrap="truncate-end">
-                {`  ${fit(run.activity, cols - used).trimEnd()}`}
-              </Text>
+          <Box flexDirection="column" marginTop={isDesktop ? 1 : 0}>
+            <Box flexDirection="row" justifyContent="space-between" gap={2}>
+              <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
+                <Text color={tone}>{glyph}</Text>
+                <Text wrap="truncate-end">{run.description}</Text>
+                <Text dimColor wrap="truncate-end">
+                  {run.type}
+                </Text>
+              </Box>
+              <Text dimColor>{timing}</Text>
+            </Box>
+            {isRunning && (
+              <Box flexDirection="row" gap={1} paddingLeft={2} alignItems="center">
+                {meter(`bar-${run.toolUseId}`, progress, ACCENT, `${percent}% done`)}
+                <Text dimColor>{`${percent}%`.padStart(4)}</Text>
+                <Box flexShrink={1} minWidth={0} marginLeft={1}>
+                  <Text dimColor italic wrap="truncate-end">
+                    {run.activity}
+                  </Text>
+                </Box>
+              </Box>
             )}
           </Box>,
         )
       })
+
+      sections.push(<Box flexDirection="column">{rows}</Box>)
     }
 
     if (pending?.phase === 'writing') {
-      rows.push(
-        <Box flexDirection="row">
-          <Text color="cyan">◌ </Text>
+      sections.push(
+        <Box flexDirection="row" gap={1}>
+          <Text color={ACCENT}>◌</Text>
           <Text dimColor>Writing handoff prompt…</Text>
         </Box>,
       )
     }
 
     if (pending?.phase === 'ready') {
-      rows.push(
-        <Box key="handoff" flexDirection="row" gap={1}>
-          <Text color="cyan">{pending.source === 'auto' ? '✦' : '⇢'}</Text>
-          <Text bold wrap="truncate-end">
-            {pending.title}
-          </Text>
-          {pending.reason !== '' && (
-            <Text dimColor wrap="truncate-end">
-              {`· ${pending.reason}`}
+      sections.push(
+        <Box
+          key="handoff"
+          flexDirection="row"
+          justifyContent="space-between"
+          gap={2}
+          alignItems="center"
+        >
+          <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
+            <Text color={ACCENT}>{pending.source === 'auto' ? '✦' : '⇢'}</Text>
+            <Text bold wrap="truncate-end">
+              {pending.title}
             </Text>
-          )}
-          <Button
-            key="handoff-start"
-            variant="primary"
-            hotkey="s"
-            label="Start fresh session"
-            onPress={press => startFresh($, pending, press.surface)}
-          />
-          <Button
-            key="handoff-copy"
-            dimColor
-            hotkey="c"
-            label="Copy"
-            onPress={async press => {
-              const copied = await $.ui.copy({ text: pending.prompt, surface: press.surface })
-              $.ui.toast(copied.isCopied ? 'Handoff copied.' : 'Could not reach the clipboard.')
-            }}
-          />
-          <Button
-            key="handoff-dismiss"
-            role="dismiss"
-            dimColor
-            hotkey="x"
-            label="✕"
-            onPress={() => update($, handoff, () => null)}
-          />
+            {pending.reason !== '' && (
+              <Text dimColor wrap="truncate-end">
+                {pending.reason}
+              </Text>
+            )}
+          </Box>
+          <Box flexDirection="row" gap={1}>
+            <Button
+              key="handoff-start"
+              variant="primary"
+              hotkey="s"
+              label="Start fresh session"
+              onPress={press => startFresh($, pending, press.surface)}
+            />
+            <Button
+              key="handoff-copy"
+              dimColor
+              hotkey="c"
+              label="Copy"
+              onPress={async press => {
+                const copied = await $.ui.copy({ text: pending.prompt, surface: press.surface })
+                $.ui.toast(copied.isCopied ? 'Handoff copied.' : 'Could not reach the clipboard.')
+              }}
+            />
+            <Button
+              key="handoff-dismiss"
+              role="dismiss"
+              dimColor
+              hotkey="x"
+              label="Dismiss"
+              onPress={() => update($, handoff, () => null)}
+            />
+          </Box>
         </Box>,
       )
     }
 
     if (rate) {
-      const width = clamp(Math.floor(cols / 5), 10, 24)
-      const [full, empty] = bar(rate.percent / 100, width, '━', '─')
-      const color = rate.percent >= 90 ? 'red' : rate.percent >= 70 ? 'yellow' : 'cyan'
+      const percent = Math.round(rate.percent)
+      const tone = rate.percent >= 90 ? ERROR : rate.percent >= 70 ? WARNING : NEUTRAL
       const resets = rate.resetsAt ? Date.parse(rate.resetsAt) : NaN
 
-      rows.push(
-        <Box flexDirection="row">
-          <Text dimColor>5h </Text>
-          <Text color={color} dimColor={rate.percent < 70}>
-            {full}
+      sections.push(
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Text dimColor>5-hour limit</Text>
+          {meter('usage-bar', rate.percent / 100, tone, `${percent}% of the 5-hour limit used`)}
+          <Text color={rate.percent >= 70 ? tone : undefined} dimColor={rate.percent < 70}>
+            {`${percent}%`}
           </Text>
-          <Text dimColor>{empty}</Text>
-          <Text dimColor wrap="truncate-end">
-            {` ${Math.round(rate.percent)}%`}
-            {Number.isNaN(resets) ? '' : ` · resets ${clockTime(resets)}`}
-          </Text>
+          {!Number.isNaN(resets) && <Text dimColor>{`·  resets ${clockTime(resets)}`}</Text>}
         </Box>,
       )
     }
@@ -597,7 +675,9 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         {above}
-        {rows}
+        <Box flexDirection="column" gap={isDesktop ? 1 : 0}>
+          {sections}
+        </Box>
       </Box>
     )
   })

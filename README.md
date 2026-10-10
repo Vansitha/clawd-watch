@@ -7,13 +7,17 @@ Mods for Claude Code: plugins of function hooks that draw UI and react to events
 A small heads-up display above the prompt box.
 
 ```
-◆ 2 subagents working · 1/3 done · ~1m 20s left · done ≈ 3:42 PM
-  ⠹ Find auth handlers       Explore   ▰▰▰▰▰▱▱▱▱▱  48%  0:42 · ~45s left  Searching "login"
-  ✓ Design the schema        Plan      ▰▰▰▰▰▰▰▰▰▰ 100%  1:05 · in 1m 5s   Done
-✦ Build the login page · next task is separate from this one  [ Start fresh session ]  Copy  ✕
-5h ━━━━━━━━────────────── 34% · resets 4:20 PM
+Subagents  2 running  ·  1 done  ·  ~1m 20s left  ·  done ≈ 3:42 PM
+⠹ Find auth handlers  Explore                          0:42  ·  ~45s left
+  ━━━━━━━━━━──────────  48%   Searching "login"
+✓ Design the schema  Plan                                    done in 1:05
+
+✦ Build the login page  next task is separate   [Start fresh session] [Copy] [Dismiss]
+
+5-hour limit  ━━━━━━──────────────  34%  ·  resets 4:20 PM
 ```
 
+In the desktop app the bars are drawn as rounded bars and the sections are spaced apart.
 - **5-hour usage meter**: a subtle horizontal bar showing the five-hour rate-limit window, its percentage and when it resets. It turns yellow at 70% and red at 90%. It updates with every model response, and shows only on a Claude subscription login (an API key has no five-hour window).
 - **Subagent panel**: while subagents run, one row each with its task, type, a progress bar, elapsed time, time left and what it is doing right now, plus a header with the estimated finish time for the whole batch. Claude Code does not report real progress for subagents, so progress and ETAs are estimates from elapsed time, steps taken and how long past subagents of the same type took. The mod remembers past runs across sessions, so estimates improve with use.
 - **Handoff pill**: one click on **Start fresh session** clears the conversation and submits a starter prompt for the next piece of work. You type nothing. The prompt is also copied to your clipboard.
