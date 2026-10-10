@@ -7,5 +7,18 @@
   },
   "types": "./types/index.d.ts",
   "license": "MIT",
-  "repository": "https://github.com/Vansitha/claude-mods"
+  "repository": "https://github.com/Vansitha/claude-mods",
+  "userConfig": {
+    "show_in": {
+      "type": "string",
+      "title": "Show in",
+      "description": "Where skill-dock is shown: the desktop app, the terminal, or both. Skill use is counted everywhere.",
+      "default": "both",
+      "options": [
+        "both",
+        "desktop",
+        "terminal"
+      ]
+    }
+  }
 }

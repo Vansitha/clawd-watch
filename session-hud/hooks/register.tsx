@@ -34,6 +34,28 @@ const ERROR = '#d9534f'
 
 // The width of the section-name column every claude-mods band shares, in cells.
 const LABEL_WIDTH = 13
+// Narrower than this, a section's name goes on its own line above its content.
+const NARROW_COLUMNS = 72
+// The "ctrl+x tab" hint's key: the first mod in the band to draw it shows it, the rest see it.
+const HINT_KEY = 'claude-mods-hint'
+
+/** Whether a drawn tree already holds an element with this key. */
+function hasKey(node: unknown, key: string): boolean {
+  if (!node || typeof node !== 'object') return false
+  const element = node as { props?: { key?: unknown }; children?: unknown[] }
+
+  return element.props?.key === key || (element.children ?? []).some(c => hasKey(c, key))
+}
+
+/** Whether the mod runs on a surface, by its "Show in" setting: both, desktop or terminal. */
+export function runsOn(showIn: string, surface: string | null | undefined): boolean {
+  if (showIn === 'desktop')
+    return surface !== 'terminal' && surface !== null && surface !== undefined
+  if (showIn === 'terminal')
+    return surface === 'terminal' || surface === null || surface === undefined
+
+  return true
+}
 
 type Sample = { type: string; ms: number; steps: number }
 
@@ -184,6 +206,8 @@ const local = {
   isChecking: false,
   wasLive: false,
   isTicking: false,
+  // False in a session on a surface the "Show in" setting leaves out.
+  isActive: true,
 }
 
 /** Starts the once-a-second redraw that keeps elapsed times and ETAs moving. */
@@ -316,9 +340,13 @@ async function startFresh($: EngineInterface, ready: Handoff, surface: RenderSur
   await $.prompt.submit({ text: ready.prompt, asUser: true })
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const showIn = String(options.show_in ?? 'both')
+
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    local.isActive = runsOn(showIn, e.surface)
+    if (!local.isActive) return result
     startTicker($)
 
     // Each step stands alone, so one that fails doesn't stop the others.
@@ -338,6 +366,7 @@ export const register: Register = on => {
   })
 
   on('session.measure', async ($, e, next) => {
+    if (!local.isActive) return next(e)
     // How full the context is decides how soon to suggest a fresh session.
     local.contextPercent = e.context.percent ?? local.contextPercent
 
@@ -376,6 +405,7 @@ export const register: Register = on => {
   })
 
   on('agent.spawn', async ($, e, next) => {
+    if (!local.isActive) return next(e)
     startTicker($)
     const at = await $.clock.now()
     const run: AgentRun = {
@@ -407,6 +437,7 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    if (!local.isActive) return next(e)
     const agentId = e.agentId
 
     if (agentId !== undefined) {
@@ -440,6 +471,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (!local.isActive) return next(e)
     const result = await next(e)
     const agentId = e.agentId
 
@@ -474,7 +506,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Other mods' sections come first; ours follow, nearer the prompt.
     const above = await next(e)
-    if (e.props.hasSurvey) return above
+    if (e.props.hasSurvey || !runsOn(showIn, e.surface)) return above
 
     const [list, pending] = await Promise.all([
       read($, agents),
@@ -497,16 +529,47 @@ export const register: Register = on => {
 
     // Every section: its name in a fixed column on the left, its content beside it.
     // A one-line section with buttons centres its name on them; a list keeps it on the first line.
-    const section = (label: string, content: JSX.Element, isOneLine = false) => (
-      <Box flexDirection="row" gap={2} alignItems={isOneLine ? 'center' : 'flex-start'}>
-        <Box width={LABEL_WIDTH} flexShrink={0}>
-          <Text dimColor>{label}</Text>
+    const isTerminal = e.surface === 'terminal'
+    const isNarrow = cols < NARROW_COLUMNS
+    // Without fullscreen the terminal takes no clicks: say once how to reach the buttons.
+    let needsHint = isTerminal && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
+    const plain = isTerminal ? { plain: true as const } : {}
+
+    // Every section: its name in a fixed column on the left (on its own line when narrow),
+    // its content beside it. One with buttons centres its name on them.
+    const section = (label: string, content: JSX.Element, kind: 'list' | 'controls' = 'list') => {
+      const hasHint = kind === 'controls' && needsHint
+      if (hasHint) needsHint = false
+      const isCentred = kind === 'controls' && !hasHint && !isNarrow
+
+      return (
+        <Box
+          flexDirection={isNarrow ? 'column' : 'row'}
+          gap={isNarrow ? 0 : 2}
+          alignItems={isCentred ? 'center' : 'flex-start'}
+        >
+          <Box flexDirection="column" flexShrink={0} {...(isNarrow ? {} : { width: LABEL_WIDTH })}>
+            <Text dimColor>{label}</Text>
+            {hasHint && (
+              <Box key={HINT_KEY}>
+                <Text dimColor italic>
+                  ctrl+x tab
+                </Text>
+              </Box>
+            )}
+          </Box>
+          <Box
+            flexDirection="column"
+            flexGrow={1}
+            flexShrink={1}
+            minWidth={0}
+            paddingLeft={isNarrow ? 2 : 0}
+          >
+            {content}
+          </Box>
         </Box>
-        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-          {content}
-        </Box>
-      </Box>
-    )
+      )
+    }
 
     // A rounded SVG bar where the surface draws SVG, a run of blocks in the terminal.
     const meter = (key: string, fraction: number, fill: string, label: string) => {
@@ -627,9 +690,10 @@ export const register: Register = on => {
                 </Text>
               )}
             </Box>
-            <Box flexDirection="row" gap={1} flexShrink={0}>
+            <Box flexDirection="row" gap={isTerminal ? 3 : 1} flexShrink={0}>
               <Button
                 key="handoff-start"
+                {...plain}
                 variant="primary"
                 hotkey="s"
                 label="Start fresh session"
@@ -637,6 +701,7 @@ export const register: Register = on => {
               />
               <Button
                 key="handoff-copy"
+                {...plain}
                 hotkey="c"
                 label="Copy"
                 onPress={async press => {
@@ -646,6 +711,7 @@ export const register: Register = on => {
               />
               <Button
                 key="handoff-dismiss"
+                {...plain}
                 role="dismiss"
                 hotkey="x"
                 label="Dismiss"
@@ -653,7 +719,7 @@ export const register: Register = on => {
               />
             </Box>
           </Box>,
-          true,
+          'controls',
         ),
       )
     }
@@ -663,8 +729,9 @@ export const register: Register = on => {
         {above}
         <Box
           flexDirection="column"
-          gap={isDesktop ? 1 : 0}
-          marginTop={isDesktop && hasAbove ? 1 : 0}
+          // A blank row between sections, on every surface: easier to scan.
+          gap={1}
+          marginTop={hasAbove ? 1 : 0}
         >
           {sections}
         </Box>

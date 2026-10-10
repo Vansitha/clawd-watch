@@ -9,8 +9,31 @@ const isPaused = atom({ plugin: 'message-queue', key: 'isPaused' } as const, fal
 const ACCENT = '#d97757'
 // The width of the section-name column every claude-mods band shares, in cells.
 const LABEL_WIDTH = 13
+// Narrower than this, a section's name goes on its own line above its content.
+const NARROW_COLUMNS = 72
+// The "ctrl+x tab" hint's key: the first mod in the band to draw it shows it, the rest see it.
+const HINT_KEY = 'claude-mods-hint'
 
-const local = { isWorking: false, isSending: false, nextId: 1 }
+/** Whether a drawn tree already holds an element with this key. */
+function hasKey(node: unknown, key: string): boolean {
+  if (!node || typeof node !== 'object') return false
+  const element = node as { props?: { key?: unknown }; children?: unknown[] }
+
+  return element.props?.key === key || (element.children ?? []).some(c => hasKey(c, key))
+}
+
+/** Whether the mod runs on a surface, by its "Show in" setting: both, desktop or terminal. */
+export function runsOn(showIn: string, surface: string | null | undefined): boolean {
+  if (showIn === 'desktop')
+    return surface !== 'terminal' && surface !== null && surface !== undefined
+  if (showIn === 'terminal')
+    return surface === 'terminal' || surface === null || surface === undefined
+
+  return true
+}
+
+// isActive is false in a session on a surface the "Show in" setting leaves out.
+const local = { isWorking: false, isSending: false, nextId: 1, isActive: true }
 
 async function enqueue($: EngineInterface, text: string) {
   const id = `${Date.now()}-${local.nextId++}`
@@ -53,9 +76,13 @@ function firstLine(text: string): string {
   return text.trim().includes('\n') ? `${line} …` : line
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const showIn = String(options.show_in ?? 'both')
+
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    local.isActive = runsOn(showIn, e.surface)
+    if (!local.isActive) return result
     await $.command
       .register({
         name: 'queue',
@@ -76,7 +103,7 @@ export const register: Register = on => {
   // The queue key (chat:queueSubmit) while a turn runs: hold the message instead of steering.
   on('prompt.submit', async ($, e, next) => {
     const isTyped = e.origin.kind === 'composer'
-    if (!e.wait || !isTyped || e.turnId === undefined) return next(e)
+    if (!local.isActive || !e.wait || !isTyped || e.turnId === undefined) return next(e)
 
     if (e.attachments?.length) {
       $.ui.toast("Messages with images can't be queued, so this one was sent now.")
@@ -129,7 +156,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId !== undefined) return result
+    if (e.agentId !== undefined || !local.isActive) return result
 
     local.isWorking = false
     if (e.reason === 'answer') {
@@ -146,23 +173,43 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Other mods' sections come first; ours follow, nearer the prompt.
     const above = await next(e)
-    if (e.props.hasSurvey) return above
+    if (e.props.hasSurvey || !runsOn(showIn, e.surface)) return above
 
     const [list, paused] = await Promise.all([read($, messages), read($, isPaused)])
     if (list.length === 0) return above
 
     const { Box, Text, Button } = $.ui.resolve(e)
-    const isDesktop = e.surface === 'desktop'
+    const isTerminal = e.surface === 'terminal'
+    const isNarrow = e.props.bodyColumns < NARROW_COLUMNS
     const hasAbove = ((above as { children?: unknown[] }).children?.length ?? 0) > 0
+    // Without fullscreen the terminal takes no clicks: say once how to reach the buttons.
+    const hasHint = isTerminal && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
 
     return (
       <Box flexDirection="column">
         {above}
-        <Box flexDirection="row" gap={2} marginTop={isDesktop && hasAbove ? 1 : 0}>
-          <Box width={LABEL_WIDTH} flexShrink={0}>
+        <Box
+          flexDirection={isNarrow ? 'column' : 'row'}
+          gap={isNarrow ? 0 : 2}
+          marginTop={hasAbove ? 1 : 0}
+        >
+          <Box flexDirection="column" flexShrink={0} {...(isNarrow ? {} : { width: LABEL_WIDTH })}>
             <Text dimColor>{`Queued (${list.length})`}</Text>
+            {hasHint && (
+              <Box key={HINT_KEY}>
+                <Text dimColor italic>
+                  ctrl+x tab
+                </Text>
+              </Box>
+            )}
           </Box>
-          <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Box
+            flexDirection="column"
+            flexGrow={1}
+            flexShrink={1}
+            minWidth={0}
+            paddingLeft={isNarrow ? 2 : 0}
+          >
             {list.map((m, index) => (
               <Box flexDirection="row" gap={1} alignItems="center">
                 <Box width={2} flexShrink={0}>
@@ -200,7 +247,9 @@ export const register: Register = on => {
               {paused && (
                 <Button
                   key="queue-send"
+                  {...(isTerminal ? { plain: true as const } : {})}
                   variant="primary"
+                  hotkey="n"
                   label="Send next"
                   onPress={() => sendNext($)}
                 />

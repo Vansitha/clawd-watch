@@ -5,7 +5,20 @@
   "author": {
     "name": "Vansitha"
   },
-  "types": "./types/index.d.ts",
   "license": "MIT",
-  "repository": "https://github.com/Vansitha/claude-mods"
+  "repository": "https://github.com/Vansitha/claude-mods",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "show_in": {
+      "type": "string",
+      "title": "Show in",
+      "description": "Where session-hud runs: the desktop app, the terminal, or both.",
+      "default": "both",
+      "options": [
+        "both",
+        "desktop",
+        "terminal"
+      ]
+    }
+  }
 }

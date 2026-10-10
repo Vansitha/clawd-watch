@@ -178,3 +178,22 @@ test('where no pane can be placed, All skills opens the list inside the dock', a
   expect(await ui.find({ type: 'Text', text: 'AVAILABLE HERE' })).toBeUndefined()
   await ui.unmount()
 })
+
+test(
+  'set to terminal, the dock shows in the terminal only, with plain chips',
+  { options: { show_in: 'terminal' } },
+  async ($, on) => {
+    engine(on, { pins: ['simplify'], knownSkills: ['simplify'] })
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+
+    const desktop = await $.ui.mount({ ...band, surface: 'desktop' })
+    expect(await desktop.find({ key: 'dock-pin-simplify' })).toBeUndefined()
+    await desktop.unmount()
+
+    const terminal = await $.ui.mount({ ...band, surface: 'terminal' })
+    const chip = await terminal.find({ key: 'dock-pin-simplify' })
+    expect(chip?.props.plain).toBe(true)
+    expect(chip?.props.label).toBe('★ simplify')
+    await terminal.unmount()
+  },
+)

@@ -26,7 +26,7 @@ Paste this into Claude Code:
 Install claude-mods for me: clone https://github.com/Vansitha/claude-mods into ~/.claude/mods/claude-mods and follow the INSTALL.md inside it.
 ```
 
-Claude clones the repo, runs the installer (or does the same by hand on Windows), checks each mod, and tells you what to do next. It asks before changing any keys. The steps it follows are in [INSTALL.md](INSTALL.md).
+Claude asks whether you want the mods in the desktop app, the terminal or both. Then it clones the repo, runs the installer (or does the same by hand on Windows), checks each mod, and tells you what to do next. It also asks before changing any keys. The steps it follows are in [INSTALL.md](INSTALL.md).
 
 ### By hand (macOS or Linux)
 
@@ -35,13 +35,16 @@ git clone https://github.com/Vansitha/claude-mods.git ~/.claude/mods/claude-mods
 ~/.claude/mods/claude-mods/install.sh
 ```
 
+The installer asks where the mods should run: the desktop app and the terminal, the desktop app only, or the terminal only. Skip the question with `--only desktop`, `--only terminal` or `--only both`.
+
 Then quit and reopen the Claude desktop app, or start a new `claude` session. Type `/` in the prompt: `/dock`, `/queue` and `/handoff` should be in the list.
 
 The installer adds the three mods to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` and keeps everything else there. It saves the old file as `settings.json.bak`, then checks each mod. Run it again any time to update.
 
 | To | Run |
 | --- | --- |
-| Update | `~/.claude/mods/claude-mods/install.sh` (it pulls the latest version first) |
+| Update | `~/.claude/mods/claude-mods/install.sh` (it pulls the latest version first and keeps your choices) |
+| Change where they run | `~/.claude/mods/claude-mods/install.sh --only desktop` (or `terminal`, `both`), or **Show in** under `/config` |
 | Uninstall | `~/.claude/mods/claude-mods/install.sh --uninstall` |
 | Try them in one terminal session without changing your settings | `cd ~/.claude/mods/claude-mods && claude --plugin-dir session-hud --plugin-dir message-queue --plugin-dir skill-dock` |
 
@@ -124,12 +127,19 @@ Built-in skills such as `simplify` look like ordinary commands until you use the
 
 ## Where it works
 
-In the terminal the same panel is drawn in text, with `[ buttons ]` and block progress bars:
-
 ![claude-mods in the terminal](docs/terminal.png)
 
+In the terminal, the same panel is drawn in text:
+
+- **Controls are text.** Buttons read like `s: Start fresh session`, and skills are a plain list rather than boxed chips.
+- **Clicking works in the fullscreen layout.** Otherwise, press `ctrl+x tab` to move into the panel (the panel shows this hint), then use Tab and Enter, or the letter before a button. Esc returns to the prompt.
+- **Narrow windows are handled.** Under 72 columns, each section's name moves above its content so nothing gets squeezed.
+- **The skills pane** docks on the right in the fullscreen layout and opens above the prompt otherwise.
+
+Each mod has a **Show in** setting (both, desktop or terminal), under `/config` or set by the installer. A mod switched off for a surface draws nothing there and stays out of the way. skill-dock still counts the skills you use there, so its lists stay right.
+
 - **Claude desktop app, Code tab** (local sessions): everything, with native buttons and rounded progress bars.
-- **Terminal** (`claude`): everything, drawn in text. In the fullscreen layout you can click the buttons; otherwise press `ctrl+x tab` to focus the panel.
+- **Terminal** (`claude`): everything, drawn in text as above.
 - **VS Code extension and mobile:** Claude Code doesn't draw the panel above the prompt there, so nothing shows. The slash commands still work.
 - **Cloud sessions** run on a remote machine, so the mods would need to be installed there, not on your computer.
 

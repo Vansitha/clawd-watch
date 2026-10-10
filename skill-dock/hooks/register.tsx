@@ -11,6 +11,31 @@ const isInline = atom({ plugin: 'skill-dock', key: 'isInline' } as const, false)
 const PANE = 'skill-dock'
 // The width of the section-name column every claude-mods band shares, in cells.
 const LABEL_WIDTH = 13
+// Narrower than this, a section's name goes on its own line above its content.
+const NARROW_COLUMNS = 72
+// The "ctrl+x tab" hint's key: the first mod in the band to draw it shows it, the rest see it.
+const HINT_KEY = 'claude-mods-hint'
+
+// isActive is false in a session on a surface the "Show in" setting leaves out.
+const local = { isActive: true }
+
+/** Whether a drawn tree already holds an element with this key. */
+function hasKey(node: unknown, key: string): boolean {
+  if (!node || typeof node !== 'object') return false
+  const element = node as { props?: { key?: unknown }; children?: unknown[] }
+
+  return element.props?.key === key || (element.children ?? []).some(c => hasKey(c, key))
+}
+
+/** Whether the mod runs on a surface, by its "Show in" setting: both, desktop or terminal. */
+export function runsOn(showIn: string, surface: string | null | undefined): boolean {
+  if (showIn === 'desktop')
+    return surface !== 'terminal' && surface !== null && surface !== undefined
+  if (showIn === 'terminal')
+    return surface === 'terminal' || surface === null || surface === undefined
+
+  return true
+}
 const DAY = 86_400_000
 // A use counts half as much each week it ages.
 const HALF_LIFE = 7 * DAY
@@ -207,9 +232,17 @@ function skillList(
   )
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const showIn = String(options.show_in ?? 'both')
+
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    local.isActive = runsOn(showIn, e.surface)
+    // Usage is still counted on a surface the dock isn't shown on, so it's right where it is.
+    if (!local.isActive) {
+      await loadSaved($)
+      return result
+    }
 
     await $.command.register({
       name: 'dock',
@@ -247,6 +280,7 @@ export const register: Register = on => {
 
   on('command.describe', async ($, e, next) => {
     const result = await next(e)
+    if (!local.isActive) return result
     const at = await $.clock.now()
     const count = recentCount((await read($, uses))[e.command], at)
 
@@ -263,7 +297,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Other mods' sections come first; ours follow, nearer the prompt.
     const above = await next(e)
-    if (e.props.hasSurvey) return above
+    if (e.props.hasSurvey || !runsOn(showIn, e.surface)) return above
 
     const [pinned, used, list, inline] = await Promise.all([
       read($, pins),
@@ -276,13 +310,19 @@ export const register: Register = on => {
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const isDesktop = e.surface === 'desktop'
+    const isTerminal = e.surface === 'terminal'
+    const isNarrow = e.props.bodyColumns < NARROW_COLUMNS
     const hasAbove = ((above as { children?: unknown[] }).children?.length ?? 0) > 0
+    // Without fullscreen the terminal takes no clicks: say once how to reach the buttons.
+    const hasHint = isTerminal && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
+    // In the terminal, chips are plain text spaced apart; brackets around each read as noise.
+    const chip = isTerminal ? { plain: true as const } : {}
 
     // Fit as many chips as the row holds; the rest are a click away in All skills.
     const allLabel = inline ? 'Close' : `All skills (${list.length}) ›`
-    let room = e.props.bodyColumns - LABEL_WIDTH - allLabel.length - 8
+    let room = e.props.bodyColumns - (isNarrow ? 2 : LABEL_WIDTH + 2) - allLabel.length - 4
     const fits = (label: string) => {
-      const width = label.length + 5
+      const width = label.length + (isTerminal ? 2 : 5)
       if (width > room) return false
       room -= width
       return true
@@ -299,23 +339,43 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {above}
         <Box
-          flexDirection="row"
-          gap={2}
-          alignItems={inline ? 'flex-start' : 'center'}
-          marginTop={isDesktop && hasAbove ? 1 : 0}
+          flexDirection={isNarrow ? 'column' : 'row'}
+          gap={isNarrow ? 0 : 2}
+          alignItems={inline || hasHint || isNarrow ? 'flex-start' : 'center'}
+          marginTop={hasAbove ? 1 : 0}
         >
-          <Box width={LABEL_WIDTH} flexShrink={0}>
+          <Box flexDirection="column" flexShrink={0} {...(isNarrow ? {} : { width: LABEL_WIDTH })}>
             <Text dimColor>Skills</Text>
+            {hasHint && (
+              <Box key={HINT_KEY}>
+                <Text dimColor italic>
+                  ctrl+x tab
+                </Text>
+              </Box>
+            )}
           </Box>
-          <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Box
+            flexDirection="column"
+            flexGrow={1}
+            flexShrink={1}
+            minWidth={0}
+            paddingLeft={isNarrow ? 2 : 0}
+          >
             <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
-              <Box flexDirection="row" gap={1} alignItems="center" flexShrink={1} overflow="hidden">
+              <Box
+                flexDirection="row"
+                gap={isTerminal ? 2 : 1}
+                alignItems="center"
+                flexShrink={1}
+                overflow="hidden"
+              >
                 {pinLabels.length + freqLabels.length === 0 && (
                   <Text dimColor>Pin or use a skill and it shows up here</Text>
                 )}
                 {pinLabels.map(c => (
                   <Button
                     key={`dock-pin-${c.name}`}
+                    {...chip}
                     label={c.label}
                     onPress={() => insertSkill($, c.name)}
                   />
@@ -324,6 +384,7 @@ export const register: Register = on => {
                 {freqLabels.map(c => (
                   <Button
                     key={`dock-freq-${c.name}`}
+                    {...chip}
                     dimColor
                     label={c.label}
                     onPress={() => insertSkill($, c.name)}
@@ -341,7 +402,7 @@ export const register: Register = on => {
               </Box>
             </Box>
             {inline && (
-              <Box flexDirection="column" marginTop={isDesktop ? 1 : 0}>
+              <Box flexDirection="column" marginTop={isDesktop || isTerminal ? 1 : 0}>
                 {skillList($, t, { list, pinned, used, at })}
               </Box>
             )}
@@ -351,7 +412,8 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    if (!runsOn(showIn, e.surface)) return next(e)
     const [pinned, used, list] = await Promise.all([read($, pins), read($, uses), read($, skills)])
 
     return skillList($, $.ui.resolve(e), { list, pinned, used, at: await $.clock.now() })

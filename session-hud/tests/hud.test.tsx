@@ -79,6 +79,9 @@ test('/handoff writes a starter prompt and the pill clears and starts it', async
 
     const ui = await $.ui.mount({ ...band(), surface })
     expect(await ui.find({ type: 'Text', text: 'Build the login page' })).toBeDefined()
+    const start = await ui.find({ key: 'handoff-start' })
+    expect(start?.props.plain).toBe(surface === 'terminal' ? true : undefined)
+    expect(start?.props.hotkey).toBe('s')
     await ui.press({ key: 'handoff-start' })
 
     expect(ran).toEqual(['clear'])
@@ -163,3 +166,35 @@ test('estimates ease toward done and never claim it early', () => {
   expect(late.remaining).toBeGreaterThan(0)
   expect(describeCall({ tool: 'Read', file_path: '/a/b/c.ts' })).toBe('Reading c.ts')
 })
+
+test(
+  '"Show in: desktop" keeps the terminal clear',
+  { options: { show_in: 'desktop' } },
+  async ($, on) => {
+    mock.clock(on, { now: 2_000_000 })
+    mock.store(on)
+    on('agent.spawn', () => ({ model: 'm', agentId: 'agent-1' }))
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Box } = $.ui.resolve(e)
+      return <Box key="engine" />
+    })
+    await $.agent.spawn({
+      tool_use_id: 'toolu_1',
+      prompt: 'p',
+      description: 'Find auth handlers',
+      subagentType: 'Explore',
+      provider: { plugin: 'engine', tier: 'core' },
+      parentModel: 'm',
+      background: false,
+      fork: false,
+    })
+
+    const terminal = await $.ui.mount({ ...band(), surface: 'terminal' })
+    expect(await terminal.find({ type: 'Text', text: 'Subagents' })).toBeUndefined()
+    await terminal.unmount()
+
+    const desktop = await $.ui.mount({ ...band(), surface: 'desktop' })
+    expect(await desktop.find({ type: 'Text', text: 'Subagents' })).toBeDefined()
+    await desktop.unmount()
+  },
+)

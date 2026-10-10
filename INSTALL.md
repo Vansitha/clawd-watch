@@ -13,6 +13,7 @@ Install claude-mods for me: clone https://github.com/Vansitha/claude-mods into ~
 - **Settings files:** never replace `~/.claude/settings.json` or `~/.claude/keybindings.json` wholesale. Read them first and change only what these steps name. Keep every other key.
 - **Errors:** if a step fails, stop and show the person the exact output. Don't work around it by hand-editing files the installer refused to touch, such as a `settings.json` that isn't valid JSON.
 - **Permissions:** don't use `sudo`. Everything lives in the person's home folder.
+- **Before installing:** ask where the mods should run: the desktop app and the terminal, the desktop app only, or the terminal only. Pass the answer to the installer as `--only both`, `--only desktop` or `--only terminal`.
 - **Optional step:** ask before step 5 (the Shift+Enter key). It changes what a key does.
 - **Reporting:** when you're done, say what was installed, where, and what the person needs to do next (step 4).
 
@@ -49,15 +50,20 @@ On Windows the folder is `%USERPROFILE%\.claude\mods\claude-mods`.
 
 ## 3a. Install on macOS or Linux
 
+Use the person's answer from the rules above:
+
 ```sh
-~/.claude/mods/claude-mods/install.sh
+~/.claude/mods/claude-mods/install.sh --only both       # or: --only desktop, --only terminal
 ```
+
+Always pass `--only` when you run it. Without it, the installer asks the question itself, but only when someone is typing at a terminal.
 
 The installer:
 
 1. Adds the three mod folders to `env.CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. It keeps every other setting and never adds a path twice.
 2. Saves the previous file as `~/.claude/settings.json.bak`.
-3. Checks each mod with `claude plugin validate`, if `claude` is on the PATH.
+3. Sets each mod's **Show in** setting (`pluginConfigs.<mod>.options.show_in` in `settings.json`) to the `--only` choice.
+4. Checks each mod with `claude plugin validate`, if `claude` is on the PATH.
 
 Run from inside the clone, it also pulls the latest version first, unless the clone has local changes.
 
@@ -92,7 +98,18 @@ If it exits with an error, show the person the output. The usual causes:
    ```
 
    Write the real expanded paths (`C:\Users\<name>\...`), not `%USERPROFILE%`. If the variable already has paths, keep them and add these after a `;`. Keep every other key in the file.
-3. If `claude` is on the PATH, check each mod: `claude plugin validate <path>`.
+3. If the person chose the desktop app only or the terminal only, set each mod's **Show in** setting. Merge it into any `pluginConfigs` already there:
+
+   ```json
+   "pluginConfigs": {
+     "session-hud": { "options": { "show_in": "desktop" } },
+     "message-queue": { "options": { "show_in": "desktop" } },
+     "skill-dock": { "options": { "show_in": "desktop" } }
+   }
+   ```
+
+   Use `"terminal"` for the terminal only. Leave it out for both.
+4. If `claude` is on the PATH, check each mod: `claude plugin validate <path>`.
 
 ## 4. Load and check
 
@@ -125,17 +142,21 @@ If it exists, add `"shift+enter": "chat:queueSubmit"` to the `Chat` context's `b
 
 Some terminals send Shift+Enter as a plain Enter. If it doesn't work there, suggest running `/terminal-setup` once. Without the key, `/queue <message>` does the same job everywhere.
 
+## Changing where the mods run
+
+Run `~/.claude/mods/claude-mods/install.sh --only desktop` (or `terminal`, `both`), then start a new session. People can also change **Show in** for each mod under `/config` in Claude Code.
+
 ## Updating
 
-Run `~/.claude/mods/claude-mods/install.sh` again. It pulls the latest version first, unless the clone has local changes. Then start a new session.
+Run `~/.claude/mods/claude-mods/install.sh` again. It keeps the person's choice of where the mods run. It pulls the latest version first, unless the clone has local changes. Then start a new session.
 
 ## Uninstalling
 
 ```sh
-~/.claude/mods/claude-mods/install.sh --uninstall   # removes the mods from settings.json
+~/.claude/mods/claude-mods/install.sh --uninstall   # removes the mods and their settings from settings.json
 rm -rf ~/.claude/mods/claude-mods                   # optional: deletes the files
 ```
 
-On Windows, remove the three paths from `env.CLAUDE_CODE_PLUGIN_DIRS` by hand, then delete the folder.
+On Windows, remove the three paths from `env.CLAUDE_CODE_PLUGIN_DIRS` and the three mods' entries from `pluginConfigs` by hand, then delete the folder.
 
 If the person added the Shift+Enter key, remove `"shift+enter": "chat:queueSubmit"` from `~/.claude/keybindings.json` too.
