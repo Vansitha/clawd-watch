@@ -127,10 +127,11 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
 
   const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
 
-  // Estimates follow the clock even when nothing else changes.
-  const before = (await ui.find({ type: 'Text', text: /^·  ~/ }))?.text
+  // The bar follows the clock even when nothing else changes; no countdown ticks beside it.
+  const before = (await ui.find({ type: 'Svg' }))?.props.source
   await clock.advance(65_000)
-  expect((await ui.find({ type: 'Text', text: /^·  ~/ }))?.text).not.toBe(before)
+  expect((await ui.find({ type: 'Svg' }))?.props.source).not.toBe(before)
+  expect(await ui.find({ type: 'Text', text: /~\d+m \d+s|in ~/ })).toBeUndefined()
 
   await $.turn.complete({
     answer: 'found',

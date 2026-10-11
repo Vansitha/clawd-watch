@@ -506,10 +506,7 @@ function agentRow(t: ElementTable, run: AgentRun, at: number, style: Style) {
           </Text>
         </Box>
         {isRunning ? (
-          <Box flexDirection="row" gap={1}>
-            <Text>{`done by ~${clockTime(at + remaining)}`}</Text>
-            <Text dimColor>{`·  ~${duration(remaining)}`}</Text>
-          </Box>
+          <Text>{`done by ~${clockTime(at + remaining)}`}</Text>
         ) : (
           <Text dimColor>{`${look.verb} ${duration(elapsed)}`}</Text>
         )}
@@ -547,10 +544,7 @@ function subagentsSection(
   const fit = Math.max(1, Math.floor((maxRows - BAND_CHROME_ROWS) / ROWS_PER_AGENT))
 
   const summary = isRunning ? (
-    <Box flexDirection="row" gap={1} flexShrink={0}>
-      <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
-      <Text dimColor>{`·  in ~${duration(left)}`}</Text>
-    </Box>
+    <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
   ) : (
     <Text color={SUCCESS}>All done</Text>
   )

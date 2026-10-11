@@ -57,10 +57,10 @@ Installed it when it was called claude-mods or Overwatch? Install Clawd Watch as
 ## session-hud
 
 ```
-Subagents     All done by ~5:59 PM  ·  in ~4m 46s
-              ● Build rooms: crew and seats            done by ~5:57 PM  ·  ~3m 36s
+Subagents     All done by ~5:59 PM
+              ● Build rooms: crew and seats            done by ~5:57 PM
                 ━━━━━━━──────────  Reading crew-tokens.ts
-              ● Remove the hands overlay               done by ~5:59 PM  ·  ~4m 46s
+              ● Remove the hands overlay               done by ~5:59 PM
                 ━━━──────────────  Editing Hand.tsx
 Next session  Build the upgrades screen         [Start fresh session] [Copy] [Dismiss]
 ```
