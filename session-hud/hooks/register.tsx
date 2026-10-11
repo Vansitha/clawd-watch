@@ -4,7 +4,7 @@ import type { ElementTable, EngineInterface, Register, RenderSurface, Timer } fr
 import type { AgentRun, Handoff } from '../types'
 
 type ReadyHandoff = Extract<Handoff, { phase: 'ready' }>
-type Sample = { type: string; ms: number; steps: number }
+type Sample = { type: string; ms: number; steps: number; guessMs?: number; guessSteps?: number }
 type Style = { isText: boolean; isStacked: boolean; barCells: number }
 
 const agents = atom({ plugin: 'session-hud', key: 'agents' } as const, [])
@@ -46,6 +46,24 @@ const DEFAULT_MS: Record<string, number> = {
 const DEFAULT_STEPS: Record<string, number> = { Explore: 20, Plan: 15, 'general-purpose': 40 }
 const FALLBACK_MS = 180_000
 const FALLBACK_STEPS = 25
+
+/** Claude sizes each subagent's task from its instructions, with a small, fast model. */
+const SIZE_MODEL = 'haiku'
+const SIZE_TIMEOUT_MS = 20_000
+const SIZE_MAX_TOKENS = 200
+/** How much of a subagent's instructions the sizing call reads. */
+const SIZE_PROMPT_CHARS = 6000
+/** Bounds on a guess, and on how far learned corrections may stretch or shrink one. */
+const GUESS_MINUTES = { min: 0.2, max: 180 }
+const GUESS_STEPS = { min: 1, max: 1000 }
+const CORRECTION = { min: 0.25, max: 4 }
+const SIZE_RULES = `You estimate how long a Claude Code subagent will take to finish its task. A subagent works alone with tools: it reads and searches files, edits code and runs commands, one tool call at a time, then reports back.
+
+Judge the size of the work in the instructions: how many files it must read or change, whether it must run builds or tests, how open-ended it is. For reference, one tool call takes about 5 to 20 seconds. A quick lookup is about 1 to 2 minutes and 10 tool calls. Reading through a feature to explain it is about 3 to 6 minutes and 20 to 50 calls. Implementing and testing a change is about 8 to 25 minutes and 50 to 150 calls.
+
+Reply with exactly this and nothing else:
+<minutes>N</minutes><steps>M</steps>
+N is wall-clock minutes (decimals allowed) and M is the number of tool calls.`
 
 /** When to ask Claude whether the next work fits a fresh session. */
 const CHECK_AFTER_TURNS = 4
@@ -172,7 +190,7 @@ function duration(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
-function clockTime(ms: number): string {
+export function clockTime(ms: number): string {
   try {
     return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   } catch {
@@ -319,6 +337,58 @@ async function expectation($: EngineInterface, type: string) {
       }
 }
 
+/** Claude's guess at a task's minutes and tool calls, or undefined when the reply holds none. */
+export function parseSize(text: string): { ms: number; steps: number } | undefined {
+  const minutes = Number(tag(text, 'minutes'))
+  const steps = Number(tag(text, 'steps'))
+  if (!(minutes > 0) || !(steps > 0)) return undefined
+
+  return {
+    ms: clamp(minutes, GUESS_MINUTES.min, GUESS_MINUTES.max) * 60_000,
+    steps: Math.round(clamp(steps, GUESS_STEPS.min, GUESS_STEPS.max)),
+  }
+}
+
+/** How actual runs compared with Claude's guesses: the median ratio, 1 until there are enough. */
+export function correction(past: readonly Sample[], ratio: (sample: Sample) => number | undefined) {
+  const ratios = past.map(ratio).filter((r): r is number => r !== undefined && Number.isFinite(r))
+  if (ratios.length < MIN_SAMPLES) return 1
+
+  return clamp(median(ratios), CORRECTION.min, CORRECTION.max)
+}
+
+/** Asks Claude to size a subagent's task, then sets the run's expectations from its answer. */
+async function sizeRun($: EngineInterface, toolUseId: string, task: string) {
+  const reply = await $.model
+    .complete({
+      model: SIZE_MODEL,
+      system: SIZE_RULES,
+      prompt: task,
+      effort: 'low',
+      maxTokens: SIZE_MAX_TOKENS,
+      timeoutMs: SIZE_TIMEOUT_MS,
+    })
+    .catch(() => undefined)
+  const guess = reply?.isAnswered ? parseSize(reply.text) : undefined
+  const past = await history($)
+  // Without a guess, the expectations from past runs that the row started with stay.
+  const sized = guess && {
+    guessMs: guess.ms,
+    guessSteps: guess.steps,
+    expectedMs: guess.ms * correction(past, s => (s.guessMs ? s.ms / s.guessMs : undefined)),
+    expectedSteps: Math.max(
+      1,
+      Math.round(
+        guess.steps * correction(past, s => (s.guessSteps ? s.steps / s.guessSteps : undefined)),
+      ),
+    ),
+  }
+
+  await update($, agents, list =>
+    list.map(one => (one.toolUseId === toolUseId ? { ...one, ...sized, isSizing: false } : one)),
+  )
+}
+
 async function finish(
   $: EngineInterface,
   matches: (run: AgentRun) => boolean,
@@ -340,7 +410,12 @@ async function finish(
   ])
 
   if (status === 'done') {
-    await remember($, { type: run.type, ms: at - run.startedAt, steps: run.steps })
+    await remember($, {
+      type: run.type,
+      ms: at - run.startedAt,
+      steps: run.steps,
+      ...(run.guessMs ? { guessMs: run.guessMs, guessSteps: run.guessSteps } : {}),
+    })
   }
 }
 
@@ -506,7 +581,11 @@ function agentRow(t: ElementTable, run: AgentRun, at: number, style: Style) {
           </Text>
         </Box>
         {isRunning ? (
-          <Text>{`done by ~${clockTime(at + remaining)}`}</Text>
+          run.isSizing ? (
+            <Text dimColor>estimating…</Text>
+          ) : (
+            <Text>{`done by ~${clockTime(at + remaining)}`}</Text>
+          )
         ) : (
           <Text dimColor>{`${look.verb} ${duration(elapsed)}`}</Text>
         )}
@@ -539,11 +618,16 @@ function subagentsSection(
   maxRows: number,
 ) {
   const { Box, Text } = t
-  const left = Math.max(0, ...shown.map(run => estimate(run, at).remaining))
+  const sized = shown.filter(run => !run.isSizing)
+  const left = Math.max(0, ...sized.map(run => estimate(run, at).remaining))
   const isRunning = shown.some(run => run.status === 'running')
+  const isEstimating = shown.some(run => run.status === 'running' && run.isSizing)
   const fit = Math.max(1, Math.floor((maxRows - BAND_CHROME_ROWS) / ROWS_PER_AGENT))
 
-  const summary = isRunning ? (
+  // The header waits for every running task's size, so it doesn't jump as answers arrive.
+  const summary = isEstimating ? (
+    <Text dimColor>Estimating…</Text>
+  ) : isRunning ? (
     <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
   ) : (
     <Text color={SUCCESS}>All done</Text>
@@ -681,7 +765,11 @@ export const register: Register = (on, options) => {
 
   on('agent.spawn', async ($, e, next) => {
     startTicker($)
-    const [at, expected] = await Promise.all([$.clock.now(), expectation($, e.subagentType)])
+    const [at, expected, isSized] = await Promise.all([
+      $.clock.now(),
+      expectation($, e.subagentType),
+      isActive($, showIn),
+    ])
     const run: AgentRun = {
       toolUseId: e.tool_use_id,
       description: e.description || e.subagentType,
@@ -692,6 +780,7 @@ export const register: Register = (on, options) => {
       steps: 0,
       activity: 'Starting',
       ...expected,
+      isSizing: isSized,
     }
     const withoutRun = (list: AgentRun[]) => list.filter(one => one.toolUseId !== run.toolUseId)
 
@@ -701,6 +790,12 @@ export const register: Register = (on, options) => {
       ),
       update($, now, () => at),
     ])
+
+    // Sized alongside the subagent, so it starts without waiting on the guess.
+    if (isSized) {
+      const task = `Subagent type: ${e.subagentType}\nTask: ${e.description}\n\nIts instructions:\n${e.prompt.slice(0, SIZE_PROMPT_CHARS)}`
+      void sizeRun($, run.toolUseId, task).catch(() => undefined)
+    }
 
     let result: Awaited<ReturnType<typeof next>>
     try {

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { AgentRun } from '../types'
-import { describeCall, estimate } from '../hooks/register'
+import { clockTime, correction, describeCall, estimate, parseSize } from '../hooks/register'
 
 const usage = {
   input_tokens: 1,
@@ -158,6 +158,7 @@ test('estimates ease toward done and never claim it early', () => {
     activity: '',
     expectedMs: 60_000,
     expectedSteps: 12,
+    isSizing: false,
   }
   const early = estimate(run, 10_000)
   const late = estimate({ ...run, steps: 40 }, 300_000)
@@ -261,4 +262,91 @@ test('a spawn that fails leaves no row behind', async ($, on) => {
   const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: 'Subagents' })).toBeUndefined()
   await ui.unmount()
+})
+
+const spawnArgs = (prompt: string) => ({
+  tool_use_id: 'toolu_1',
+  prompt,
+  description: 'Fix six notch UI issues',
+  subagentType: 'general-purpose',
+  provider: { plugin: 'engine', tier: 'core' as const },
+  parentModel: 'm',
+  background: false,
+  fork: false,
+})
+
+function hudEngine(on: Parameters<Parameters<typeof test>[1]>[1], now: number) {
+  mock.clock(on, { now })
+  mock.store(on)
+  on('agent.spawn', () => ({ model: 'm', agentId: 'agent-1' }))
+  on('agent.list', () => ({ value: [] }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box key="engine" />
+  })
+}
+
+test('Claude sizes each task; the row says estimating until it answers', async ($, on) => {
+  const NOW = 2_000_000
+  hudEngine(on, NOW)
+  let asked = ''
+  let answer: () => void = () => undefined
+  const answered = new Promise<void>(resolve => (answer = resolve))
+  on('model.complete', async ($, e) => {
+    asked = typeof e.prompt === 'string' ? e.prompt : ''
+    await answered
+    return {
+      value: { isAnswered: true as const, text: '<minutes>10</minutes><steps>80</steps>', usage },
+    }
+  })
+
+  await $.agent.spawn(spawnArgs('Fix the six notch issues listed in notch.md, then run the tests.'))
+  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+  expect(asked).toContain('Fix six notch UI issues')
+  expect(asked).toContain('notch.md')
+  expect(await ui.find({ type: 'Text', text: 'estimating…' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Estimating…' })).toBeDefined()
+
+  answer()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(
+    await ui.find({ type: 'Text', text: `done by ~${clockTime(NOW + 600_000)}` }),
+  ).toBeDefined()
+  expect(
+    await ui.find({ type: 'Text', text: `All done by ~${clockTime(NOW + 600_000)}` }),
+  ).toBeDefined()
+  await ui.unmount()
+})
+
+test('when sizing fails, the estimate from past runs shows', async ($, on) => {
+  hudEngine(on, 2_000_000)
+  on('model.complete', () => ({
+    value: {
+      isAnswered: false as const,
+      reason: 'api-error' as const,
+      status: 529,
+      error: 'overloaded',
+      usage,
+    },
+  }))
+
+  await $.agent.spawn(spawnArgs('p'))
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /^done by ~/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'estimating…' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test("Claude's guesses are read safely and corrected by how past runs went", () => {
+  expect(parseSize('<minutes>2.5</minutes><steps>30</steps>')).toEqual({ ms: 150_000, steps: 30 })
+  expect(parseSize('<minutes>999</minutes><steps>0</steps>')).toBeUndefined()
+  expect(parseSize('about ten minutes')).toBeUndefined()
+
+  const ratio = (s: { ms: number; guessMs?: number }) => (s.guessMs ? s.ms / s.guessMs : undefined)
+  const sample = (ms: number, guessMs?: number) => ({ type: 'x', ms, steps: 1, guessMs })
+  // Runs took twice what Claude guessed, so later guesses double; too few samples change nothing.
+  expect(correction([sample(20, 10), sample(40, 20), sample(60, 30)], ratio)).toBe(2)
+  expect(correction([sample(20, 10), sample(40)], ratio)).toBe(1)
+  expect(correction([sample(1000, 1), sample(1000, 1), sample(1000, 1)], ratio)).toBe(4)
 })

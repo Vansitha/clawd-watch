@@ -67,7 +67,7 @@ Next session  Build the upgrades screen         [Start fresh session] [Copy] [Di
 
 **Subagents.** While subagents run, the header says when they'll all be done. Each agent shows when it will be done, a progress bar, and what it's doing right now.
 
-Claude Code doesn't report real progress for subagents, so these are estimates. They're based on elapsed time, steps taken, and how long past subagents of the same type took. The mod remembers past runs across sessions, so estimates improve the more you use it.
+Claude Code doesn't report real progress for subagents, so these are estimates. When a subagent starts, a small, fast model (Haiku) reads its task and guesses how many minutes and tool calls it needs; the row says *estimating…* for the second or two that takes. Each finished run is compared with its guess, and later guesses are scaled to match how long your subagents really take. The mod remembers this across sessions, so estimates improve the more you use it. If the guess can't be made, the estimate falls back to how long past subagents of the same type took. Sizing costs one short Haiku call per subagent.
 
 **Handoff to a fresh session.** **Start fresh session** clears the conversation and sends a starter prompt for the next piece of work, so you don't have to write one. The prompt is also copied to your clipboard.
 

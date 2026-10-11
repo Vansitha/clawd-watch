@@ -11,6 +11,11 @@ export type AgentRun = {
   activity: string
   expectedMs: number
   expectedSteps: number
+  /** True until Claude has sized the task (or couldn't); the row says "estimating" meanwhile. */
+  isSizing: boolean
+  /** Claude's own guess, before learned corrections, kept to learn from when the run ends. */
+  guessMs?: number
+  guessSteps?: number
 }
 
 export type Handoff =
