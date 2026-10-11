@@ -5,7 +5,7 @@ import type { AgentRun, Handoff } from '../types'
 
 type ReadyHandoff = Extract<Handoff, { phase: 'ready' }>
 type Sample = { type: string; ms: number; steps: number }
-type Style = { isText: boolean; isNarrow: boolean; barCells: number }
+type Style = { isText: boolean; isStacked: boolean; barCells: number }
 
 const agents = atom({ plugin: 'session-hud', key: 'agents' } as const, [])
 const now = atom({ plugin: 'session-hud', key: 'now' } as const, 0)
@@ -122,6 +122,11 @@ function hasKey(node: unknown, key: string): boolean {
 /** Whether another mod drew anything above this one. */
 function hasContent(tree: unknown): boolean {
   return ((tree as { children?: unknown[] }).children?.length ?? 0) > 0
+}
+
+/** Rows between sections: one in the terminal, two in the desktop app, so each reads apart. */
+function sectionGap(surface: RenderSurface): number {
+  return surface === 'terminal' ? 1 : 2
 }
 
 /** Whether the "Show in" setting (both, desktop or terminal) includes a surface. */
@@ -400,41 +405,52 @@ async function copyHandoff($: EngineInterface, ready: ReadyHandoff, surface: Ren
   $.ui.toast(copied.isCopied ? 'Handoff copied.' : 'Could not reach the clipboard.')
 }
 
-/** A band section: its name in the shared left column (above it when narrow), content beside. */
+/**
+ * A band section. Stacked (the desktop app, a narrow terminal), its name heads it with `aside` at
+ * the right, and the content spans the width below. Otherwise its name sits in the shared left
+ * column, the content beside it and `aside` at the far right.
+ */
 function section(
   t: ElementTable,
   label: string,
   content: JSX.Element,
-  layout: { isNarrow: boolean; hasHint?: boolean; isCentred?: boolean },
+  layout: { isStacked: boolean; aside?: JSX.Element; hasHint?: boolean; isCentred?: boolean },
 ) {
   const { Box, Text } = t
-  const { isNarrow, hasHint = false, isCentred = false } = layout
+  const { isStacked, aside, hasHint = false, isCentred = false } = layout
+  const hint = hasHint && (
+    <Box key={HINT_KEY}>
+      <Text dimColor italic>
+        {HINT_TEXT}
+      </Text>
+    </Box>
+  )
 
-  return (
-    <Box
-      flexDirection={isNarrow ? 'column' : 'row'}
-      gap={isNarrow ? 0 : 2}
-      alignItems={isCentred && !hasHint && !isNarrow ? 'center' : 'flex-start'}
-    >
-      <Box flexDirection="column" flexShrink={0} {...(isNarrow ? {} : { width: LABEL_WIDTH })}>
-        <Text dimColor>{label}</Text>
-        {hasHint && (
-          <Box key={HINT_KEY}>
-            <Text dimColor italic>
-              {HINT_TEXT}
-            </Text>
+  if (isStacked) {
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
+          <Box flexDirection="row" gap={2} flexShrink={0}>
+            <Text dimColor>{label}</Text>
+            {hint}
           </Box>
-        )}
-      </Box>
-      <Box
-        flexDirection="column"
-        flexGrow={1}
-        flexShrink={1}
-        minWidth={0}
-        paddingLeft={isNarrow ? 2 : 0}
-      >
+          {aside}
+        </Box>
         {content}
       </Box>
+    )
+  }
+
+  return (
+    <Box flexDirection="row" gap={2} alignItems={isCentred && !hasHint ? 'center' : 'flex-start'}>
+      <Box flexDirection="column" flexShrink={0} width={LABEL_WIDTH}>
+        <Text dimColor>{label}</Text>
+        {hint}
+      </Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+        {content}
+      </Box>
+      {aside && <Box flexShrink={0}>{aside}</Box>}
     </Box>
   )
 }
@@ -530,21 +546,24 @@ function subagentsSection(
   const isRunning = shown.some(run => run.status === 'running')
   const fit = Math.max(1, Math.floor((maxRows - BAND_CHROME_ROWS) / ROWS_PER_AGENT))
 
+  const summary = isRunning ? (
+    <Box flexDirection="row" gap={1} flexShrink={0}>
+      <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
+      <Text dimColor>{`·  in ~${duration(left)}`}</Text>
+    </Box>
+  ) : (
+    <Text color={SUCCESS}>All done</Text>
+  )
+
+  // Stacked, the summary sits beside the section's name; otherwise it heads the rows.
   return section(
     t,
     'Subagents',
     <Box flexDirection="column">
-      {isRunning ? (
-        <Box flexDirection="row" gap={1}>
-          <Text bold>{`All done by ~${clockTime(at + left)}`}</Text>
-          <Text dimColor>{`·  in ~${duration(left)}`}</Text>
-        </Box>
-      ) : (
-        <Text color={SUCCESS}>All done</Text>
-      )}
+      {!style.isStacked && summary}
       {shown.slice(-fit).map(run => agentRow(t, run, at, style))}
     </Box>,
-    style,
+    { ...style, ...(style.isStacked ? { aside: summary } : {}) },
   )
 }
 
@@ -804,7 +823,7 @@ export const register: Register = (on, options) => {
     const cols = Math.max(MIN_BAND_COLUMNS, e.props.bodyColumns)
     const style: Style = {
       isText: e.surface === 'terminal',
-      isNarrow: cols < NARROW_COLUMNS,
+      isStacked: e.surface !== 'terminal' || cols < NARROW_COLUMNS,
       barCells: clamp(
         Math.floor((cols - LABEL_WIDTH) / COLUMNS_PER_BAR_CELL),
         BAR_MIN_CELLS,
@@ -826,7 +845,11 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {above}
-        <Box flexDirection="column" gap={1} marginTop={hasContent(above) ? 1 : 0}>
+        <Box
+          flexDirection="column"
+          gap={sectionGap(e.surface)}
+          marginTop={hasContent(above) ? sectionGap(e.surface) : 0}
+        >
           {sections}
         </Box>
       </Box>

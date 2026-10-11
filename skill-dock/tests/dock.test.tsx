@@ -219,3 +219,18 @@ test('the dock keeps the chips that fit, paying for the separator once', () => {
   expect(fitChips(chips, 100, 2).map(c => c.name)).toEqual(['aaaa', 'bbbbbbbbbb', 'cc'])
   expect(fitChips(chips, 3, 2)).toEqual([])
 })
+
+test('the desktop shows every pin, with All skills beside the name', async ($, on) => {
+  const many = ['simplify', 'release-checklist', 'anthropic-skills:pdf', 'anthropic-skills:xlsx']
+  engine(on, { pins: many, knownSkills: ['simplify'] })
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({
+    ...band,
+    surface: 'desktop',
+    props: { ...band.props, bodyColumns: 40 },
+  })
+  for (const name of many) expect(await ui.find({ key: `dock-pin-${name}` })).toBeDefined()
+  expect((await ui.find({ key: 'dock-all' }))?.props.label).toBe('All skills (4) ›')
+  await ui.unmount()
+})

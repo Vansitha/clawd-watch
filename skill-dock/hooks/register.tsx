@@ -45,7 +45,7 @@ const CHIP_PADDING_BUTTON = 5
 const SEPARATOR_CELLS = 3
 /** Cells the chip row leaves free: the gap before "All skills" and the band's edge. */
 const ROW_SLACK = 4
-/** Gap after the label column, or the indent under a narrow section's name. */
+/** Gap after the label column. */
 const LABEL_GAP = 2
 
 /** Copies of the stored pins, uses and known built-in skills, for hooks that run often. */
@@ -68,6 +68,11 @@ function hasKey(node: unknown, key: string): boolean {
 /** Whether another mod drew anything above this one. */
 function hasContent(tree: unknown): boolean {
   return ((tree as { children?: unknown[] }).children?.length ?? 0) > 0
+}
+
+/** Rows between sections: one in the terminal, two in the desktop app, so each reads apart. */
+function sectionGap(surface: RenderSurface): number {
+  return surface === 'terminal' ? 1 : 2
 }
 
 /** Whether the "Show in" setting (both, desktop or terminal) includes a surface. */
@@ -238,41 +243,52 @@ async function openAll($: EngineInterface) {
   await update($, isInline, () => !opened.isPlaced)
 }
 
-/** A band section: its name in the shared left column (above it when narrow), content beside. */
+/**
+ * A band section. Stacked (the desktop app, a narrow terminal), its name heads it with `aside` at
+ * the right, and the content spans the width below. Otherwise its name sits in the shared left
+ * column, the content beside it and `aside` at the far right.
+ */
 function section(
   t: ElementTable,
   label: string,
   content: JSX.Element,
-  layout: { isNarrow: boolean; hasHint?: boolean; isCentred?: boolean },
+  layout: { isStacked: boolean; aside?: JSX.Element; hasHint?: boolean; isCentred?: boolean },
 ) {
   const { Box, Text } = t
-  const { isNarrow, hasHint = false, isCentred = false } = layout
+  const { isStacked, aside, hasHint = false, isCentred = false } = layout
+  const hint = hasHint && (
+    <Box key={HINT_KEY}>
+      <Text dimColor italic>
+        {HINT_TEXT}
+      </Text>
+    </Box>
+  )
 
-  return (
-    <Box
-      flexDirection={isNarrow ? 'column' : 'row'}
-      gap={isNarrow ? 0 : 2}
-      alignItems={isCentred && !hasHint && !isNarrow ? 'center' : 'flex-start'}
-    >
-      <Box flexDirection="column" flexShrink={0} {...(isNarrow ? {} : { width: LABEL_WIDTH })}>
-        <Text dimColor>{label}</Text>
-        {hasHint && (
-          <Box key={HINT_KEY}>
-            <Text dimColor italic>
-              {HINT_TEXT}
-            </Text>
+  if (isStacked) {
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
+          <Box flexDirection="row" gap={2} flexShrink={0}>
+            <Text dimColor>{label}</Text>
+            {hint}
           </Box>
-        )}
-      </Box>
-      <Box
-        flexDirection="column"
-        flexGrow={1}
-        flexShrink={1}
-        minWidth={0}
-        paddingLeft={isNarrow ? 2 : 0}
-      >
+          {aside}
+        </Box>
         {content}
       </Box>
+    )
+  }
+
+  return (
+    <Box flexDirection="row" gap={2} alignItems={isCentred && !hasHint ? 'center' : 'flex-start'}>
+      <Box flexDirection="column" flexShrink={0} width={LABEL_WIDTH}>
+        <Text dimColor>{label}</Text>
+        {hint}
+      </Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+        {content}
+      </Box>
+      {aside && <Box flexShrink={0}>{aside}</Box>}
     </Box>
   )
 }
@@ -362,7 +378,8 @@ function chipRow($: EngineInterface, t: ElementTable, chips: Chip[], isText: boo
   const row: JSX.Element[] = []
 
   chips.forEach((chip, index) => {
-    if (!chip.isPinned && chips[index - 1]?.isPinned) row.push(<Text dimColor>│</Text>)
+    // On the desktop the stars mark the pins; a bar there could wrap to the start of a row.
+    if (isText && !chip.isPinned && chips[index - 1]?.isPinned) row.push(<Text dimColor>│</Text>)
     row.push(
       <Button
         key={`dock-${chip.isPinned ? 'pin' : 'freq'}-${chip.name}`}
@@ -450,60 +467,53 @@ export const register: Register = (on, options) => {
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const isText = e.surface === 'terminal'
-    const isNarrow = e.props.bodyColumns < NARROW_COLUMNS
+    const isStacked = !isText || e.props.bodyColumns < NARROW_COLUMNS
     // The terminal takes no clicks outside fullscreen: say how to reach the buttons.
     const hasHint = isText && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
 
-    // As many chips as the row holds; the rest are a click away in All skills.
     const allLabel = inline ? 'Close' : `All skills (${list.length}) ›`
+    const candidates = [
+      ...pinned.map(name => ({ name, label: `★ ${short(name)}`, isPinned: true })),
+      ...frequent(list, pinned, used, at, DOCK_FREQUENT).map(s => ({
+        name: s.name,
+        label: short(s.name),
+        isPinned: false,
+      })),
+    ]
+    // The desktop app wraps the chips, so every pin shows. The terminal keeps one row of the
+    // chips that fit; the rest are a click away in All skills.
     const room =
-      e.props.bodyColumns -
-      (isNarrow ? LABEL_GAP : LABEL_WIDTH + LABEL_GAP) -
-      allLabel.length -
-      ROW_SLACK
-    const chips = fitChips(
-      [
-        ...pinned.map(name => ({ name, label: `★ ${short(name)}`, isPinned: true })),
-        ...frequent(list, pinned, used, at, DOCK_FREQUENT).map(s => ({
-          name: s.name,
-          label: short(s.name),
-          isPinned: false,
-        })),
-      ],
-      room,
-      isText ? CHIP_PADDING_TEXT : CHIP_PADDING_BUTTON,
+      e.props.bodyColumns - (isStacked ? 0 : LABEL_WIDTH + LABEL_GAP + allLabel.length) - ROW_SLACK
+    const chips = isText ? fitChips(candidates, room, CHIP_PADDING_TEXT) : candidates
+    const allButton = (
+      <Button
+        key="dock-all"
+        plain
+        dimColor
+        label={allLabel}
+        onPress={() => (inline ? update($, isInline, () => false) : openAll($))}
+      />
     )
 
     return (
       <Box flexDirection="column">
         {above}
-        <Box flexDirection="column" marginTop={hasContent(above) ? 1 : 0}>
+        <Box flexDirection="column" marginTop={hasContent(above) ? sectionGap(e.surface) : 0}>
           {section(
             t,
             'Skills',
             <Box flexDirection="column">
-              <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
-                <Box
-                  flexDirection="row"
-                  gap={isText ? 2 : 1}
-                  alignItems="center"
-                  flexShrink={1}
-                  overflow="hidden"
-                >
-                  {chips.length === 0 && (
-                    <Text dimColor>Pin or use a skill and it shows up here</Text>
-                  )}
-                  {chipRow($, t, chips, isText)}
-                </Box>
-                <Box flexShrink={0}>
-                  <Button
-                    key="dock-all"
-                    plain
-                    dimColor
-                    label={allLabel}
-                    onPress={() => (inline ? update($, isInline, () => false) : openAll($))}
-                  />
-                </Box>
+              <Box
+                flexDirection="row"
+                flexWrap={isText ? 'nowrap' : 'wrap'}
+                gap={isText ? 2 : 1}
+                alignItems="center"
+                overflow="hidden"
+              >
+                {chips.length === 0 && (
+                  <Text dimColor>Pin or use a skill and it shows up here</Text>
+                )}
+                {chipRow($, t, chips, isText)}
               </Box>
               {inline && (
                 <Box flexDirection="column" marginTop={1}>
@@ -511,7 +521,7 @@ export const register: Register = (on, options) => {
                 </Box>
               )}
             </Box>,
-            { isNarrow, hasHint, isCentred: !inline },
+            { isStacked, aside: allButton, hasHint, isCentred: !inline },
           )}
         </Box>
       </Box>
