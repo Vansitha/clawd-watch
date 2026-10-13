@@ -384,7 +384,8 @@ function chipRow($: EngineInterface, t: ElementTable, chips: Chip[], isText: boo
       <Button
         key={`dock-${chip.isPinned ? 'pin' : 'freq'}-${chip.name}`}
         // In the terminal, chips are plain text spaced apart; brackets around each read as noise.
-        plain={isText || undefined}
+        // On the desktop only pins are chips, so they read apart from the skills used often.
+        plain={isText || !chip.isPinned || undefined}
         dimColor={!chip.isPinned}
         label={chip.label}
         onPress={() => insertSkill($, chip.name)}

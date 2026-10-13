@@ -30,7 +30,9 @@ const LINGER_MS = 8000
 const MAX_AGENT_ROWS = 12
 /** Rows the band spends on things other than agent rows, and the rows each agent takes. */
 const BAND_CHROME_ROWS = 3
-const ROWS_PER_AGENT = 2
+const ROWS_PER_AGENT = { terminal: 2, graphical: 1 }
+/** Cells for the time at the end of a desktop row, so the bars and times line up. */
+const TIME_COLUMN = 18
 /** Check running rows against the engine's agent list this often, in ticks. */
 const RECONCILE_EVERY_TICKS = 10
 
@@ -562,17 +564,63 @@ function meter(t: ElementTable, key: string, fraction: number, label: string, st
   )
 }
 
+/** One line on graphical surfaces: the task and what it's doing, then its bar and time in columns. */
+function agentLine(t: ElementTable, run: AgentRun, at: number, style: Style) {
+  const { Box, Text } = t
+  const { elapsed, progress, remaining } = estimate(run, at)
+  const look = STATUS_LOOK[run.status]
+  const isRunning = run.status === 'running'
+  const time = !isRunning
+    ? `${look.verb} ${duration(elapsed)}`
+    : run.isSizing
+      ? 'estimating…'
+      : `~${clockTime(at + remaining)}`
+
+  return (
+    <Box flexDirection="row" alignItems="center" gap={2}>
+      <Box flexDirection="row" gap={1} flexGrow={1} flexShrink={1} minWidth={0}>
+        <Text color={look.tone}>{look.glyph}</Text>
+        <Box flexShrink={1} minWidth={0}>
+          <Text wrap="truncate-end" dimColor={!isRunning}>
+            {run.description}
+          </Text>
+        </Box>
+        {/* What it's doing gives way first when the row runs short. */}
+        {isRunning && (
+          <Box flexShrink={4} minWidth={0} paddingLeft={1}>
+            <Text dimColor wrap="truncate-end">
+              {run.activity}
+            </Text>
+          </Box>
+        )}
+      </Box>
+      {isRunning &&
+        meter(
+          t,
+          `bar-${run.toolUseId}`,
+          progress,
+          `about ${Math.round(progress * 100)}% done`,
+          style,
+        )}
+      <Box width={TIME_COLUMN} flexShrink={0} justifyContent="flex-end">
+        <Text dimColor={!isRunning || run.isSizing}>{time}</Text>
+      </Box>
+    </Box>
+  )
+}
+
 function agentRow(t: ElementTable, run: AgentRun, at: number, style: Style) {
+  if (!style.isText) return agentLine(t, run, at, style)
+
   const { Box, Text } = t
   const { elapsed, progress, remaining } = estimate(run, at)
   const look = STATUS_LOOK[run.status]
   const isRunning = run.status === 'running'
   // Braille spinners read as stray dots in a proportional font, so only the terminal spins.
-  const glyph =
-    isRunning && style.isText ? SPINNER[Math.floor(at / TICK_MS) % SPINNER.length] : look.glyph
+  const glyph = isRunning ? SPINNER[Math.floor(at / TICK_MS) % SPINNER.length] : look.glyph
 
   return (
-    <Box flexDirection="column" marginTop={style.isText ? 0 : 1}>
+    <Box flexDirection="column">
       <Box flexDirection="row" justifyContent="space-between" gap={2}>
         <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
           <Text color={look.tone}>{glyph}</Text>
@@ -622,7 +670,8 @@ function subagentsSection(
   const left = Math.max(0, ...sized.map(run => estimate(run, at).remaining))
   const isRunning = shown.some(run => run.status === 'running')
   const isEstimating = shown.some(run => run.status === 'running' && run.isSizing)
-  const fit = Math.max(1, Math.floor((maxRows - BAND_CHROME_ROWS) / ROWS_PER_AGENT))
+  const rowsPerAgent = style.isText ? ROWS_PER_AGENT.terminal : ROWS_PER_AGENT.graphical
+  const fit = Math.max(1, Math.floor((maxRows - BAND_CHROME_ROWS) / rowsPerAgent))
 
   // The header waits for every running task's size, so it doesn't jump as answers arrive.
   const summary = isEstimating ? (

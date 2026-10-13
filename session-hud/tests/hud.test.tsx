@@ -117,7 +117,9 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
     const view = await $.ui.mount({ ...band(), surface })
     expect(await view.find({ type: 'Text', text: 'Subagents' })).toBeDefined()
     expect(await view.find({ type: 'Text', text: /^All done by ~/ })).toBeDefined()
-    expect(await view.find({ type: 'Text', text: /^done by ~/ })).toBeDefined()
+    // The terminal says when each row will be done; the desktop lines the times up in a column.
+    const rowTime = surface === 'terminal' ? /^done by ~/ : /^~\d/
+    expect(await view.find({ type: 'Text', text: rowTime })).toBeDefined()
     expect(await view.find({ type: 'Text', text: /Find auth handlers/ })).toBeDefined()
     // A progress bar: rounded SVG on the desktop, a run of blocks in the terminal.
     if (surface === 'desktop') expect(await view.find({ type: 'Svg' })).toBeDefined()
@@ -310,7 +312,7 @@ test('Claude sizes each task; the row says estimating until it answers', async (
   answer()
   await new Promise(resolve => setTimeout(resolve, 20))
   expect(
-    await ui.find({ type: 'Text', text: `done by ~${clockTime(NOW + 600_000)}` }),
+    await ui.find({ type: 'Text', text: new RegExp(`^~${clockTime(NOW + 600_000)}$`) }),
   ).toBeDefined()
   expect(
     await ui.find({ type: 'Text', text: `All done by ~${clockTime(NOW + 600_000)}` }),
@@ -333,7 +335,7 @@ test('when sizing fails, the estimate from past runs shows', async ($, on) => {
   await $.agent.spawn(spawnArgs('p'))
   await new Promise(resolve => setTimeout(resolve, 20))
   const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /^done by ~/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^~\d/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'estimating…' })).toBeUndefined()
   await ui.unmount()
 })

@@ -169,40 +169,44 @@ function section(
   )
 }
 
-function messageRow($: EngineInterface, t: ElementTable, m: QueuedMessage, index: number) {
+function messageRow(
+  $: EngineInterface,
+  t: ElementTable,
+  m: QueuedMessage,
+  index: number,
+  isText: boolean,
+) {
   const { Box, Text, Button } = t
+  // Where there's a pointer, a row's controls show only while it's hovered.
+  const reveal = isText ? {} : { display: 'none' as const, hover: { display: 'flex' as const } }
 
   return (
-    <Box flexDirection="row" gap={1} alignItems="center">
+    <Box key={`queue-row-${m.id}`} flexDirection="row" gap={1} alignItems="center">
       <Box width={INDEX_WIDTH} flexShrink={0}>
-        <Text color={ACCENT}>{`${index + 1}`}</Text>
+        <Text color={isText ? ACCENT : undefined} dimColor={!isText}>{`${index + 1}`}</Text>
       </Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
         <Text wrap="truncate-end">{firstLine(m.text)}</Text>
       </Box>
-      <Box
-        flexDirection="row"
-        gap={1}
-        width={CONTROLS_WIDTH}
-        flexShrink={0}
-        justifyContent="flex-end"
-      >
-        {index > 0 && (
+      <Box width={CONTROLS_WIDTH} flexShrink={0} justifyContent="flex-end">
+        <Box flexDirection="row" gap={1} {...reveal}>
+          {index > 0 && (
+            <Button
+              key={`queue-up-${m.id}`}
+              plain
+              dimColor
+              label="↑"
+              onPress={() => moveUp($, m.id)}
+            />
+          )}
           <Button
-            key={`queue-up-${m.id}`}
+            key={`queue-remove-${m.id}`}
             plain
             dimColor
-            label="↑"
-            onPress={() => moveUp($, m.id)}
+            label="✕"
+            onPress={() => removeWhere($, x => x.id === m.id)}
           />
-        )}
-        <Button
-          key={`queue-remove-${m.id}`}
-          plain
-          dimColor
-          label="✕"
-          onPress={() => removeWhere($, x => x.id === m.id)}
-        />
+        </Box>
       </Box>
     </Box>
   )
@@ -322,8 +326,24 @@ export const register: Register = (on, options) => {
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const isText = e.surface === 'terminal'
+    const isStacked = !isText || e.props.bodyColumns < NARROW_COLUMNS
     // The terminal takes no clicks outside fullscreen: say how to reach the buttons.
     const hasHint = isText && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
+    const status = (
+      <Box flexDirection="row" gap={2} alignItems="center" flexShrink={0}>
+        <Text dimColor>{paused ? PAUSED_NOTE : WAITING_NOTE}</Text>
+        {paused && (
+          <Button
+            key="queue-send"
+            plain={isText || undefined}
+            variant="primary"
+            hotkey="n"
+            label="Send next"
+            onPress={() => sendNext($)}
+          />
+        )}
+      </Box>
+    )
 
     return (
       <Box flexDirection="column">
@@ -332,23 +352,12 @@ export const register: Register = (on, options) => {
           {section(
             t,
             `Queued (${list.length})`,
+            // Stacked, the status sits beside the section's name; otherwise under the messages.
             <Box flexDirection="column">
-              {list.map((m, index) => messageRow($, t, m, index))}
-              <Box flexDirection="row" gap={2} alignItems="center" paddingLeft={INDEX_WIDTH + 1}>
-                <Text dimColor>{paused ? PAUSED_NOTE : WAITING_NOTE}</Text>
-                {paused && (
-                  <Button
-                    key="queue-send"
-                    plain={isText || undefined}
-                    variant="primary"
-                    hotkey="n"
-                    label="Send next"
-                    onPress={() => sendNext($)}
-                  />
-                )}
-              </Box>
+              {list.map((m, index) => messageRow($, t, m, index, isText))}
+              {!isStacked && <Box paddingLeft={INDEX_WIDTH + 1}>{status}</Box>}
             </Box>,
-            { isStacked: !isText || e.props.bodyColumns < NARROW_COLUMNS, hasHint },
+            { isStacked, hasHint, ...(isStacked ? { aside: status } : {}) },
           )}
         </Box>
       </Box>
