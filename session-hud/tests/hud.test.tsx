@@ -352,3 +352,17 @@ test("Claude's guesses are read safely and corrected by how past runs went", () 
   expect(correction([sample(20, 10), sample(40)], ratio)).toBe(1)
   expect(correction([sample(1000, 1), sample(1000, 1), sample(1000, 1)], ratio)).toBe(4)
 })
+
+test('folded, the panel still says how many subagents are running', async ($, on) => {
+  hudEngine(on, 2_000_000)
+  on('model.complete', () => ({
+    value: { isAnswered: true as const, text: '<minutes>5</minutes><steps>40</steps>', usage },
+  }))
+  await $.agent.spawn(spawnArgs('p'))
+
+  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+  await ui.press({ key: 'clawd-watch-fold' })
+  expect(await ui.find({ type: 'Text', text: '1 subagent running' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Subagents' })).toBeUndefined()
+  await ui.unmount()
+})

@@ -7,7 +7,7 @@ import type {
   RenderSurface,
 } from 'claude-code'
 
-import type { SkillEntry, Uses } from '../types'
+import type { SkillEntry, Uses, Panel } from '../types'
 
 type Chip = { name: string; label: string; isPinned: boolean }
 
@@ -17,12 +17,26 @@ const skills = atom({ plugin: 'skill-dock', key: 'skills' } as const, [])
 const isInline = atom({ plugin: 'skill-dock', key: 'isInline' } as const, false)
 
 // Shared by every Clawd Watch mod; keep these identical across them.
-const LABEL_WIDTH = 13
+const LABEL_WIDTH = 17
 const NARROW_COLUMNS = 72
 const HINT_KEY = 'clawd-watch-hint'
 const HINT_TEXT = 'ctrl+x tab'
+const PANEL_KEY = 'clawd-watch-panel'
+const PANEL_NAME = 'Clawd Watch'
+const STORE_PANEL = 'panel'
+/** Each mod keeps its own copy of whether the panel is folded; the latest change wins. */
+const HUD_PANEL = atom({ plugin: 'session-hud', key: 'panel' } as const, null)
+const QUEUE_PANEL = atom({ plugin: 'message-queue', key: 'panel' } as const, null)
+const DOCK_PANEL = atom({ plugin: 'skill-dock', key: 'panel' } as const, null)
+/** What the folded panel sums up, read from the mods that own it. */
+const SUBAGENTS = atom({ plugin: 'session-hud', key: 'agents' } as const, [])
+const NEXT_SESSION = atom({ plugin: 'session-hud', key: 'handoff' } as const, null)
+const QUEUED = atom({ plugin: 'message-queue', key: 'messages' } as const, [])
+/** This mod's own copy, the one it writes. */
+const OWN_PANEL = atom({ plugin: 'skill-dock', key: 'panel' } as const, null)
 
 const PANE = 'skill-dock'
+const DOCK_LABEL = 'Favourite skills'
 const STORE_PINS = 'pins'
 const STORE_USES = 'uses'
 const STORE_KNOWN = 'knownSkills'
@@ -73,6 +87,106 @@ function hasContent(tree: unknown): boolean {
 /** Rows between sections: one in the terminal, two in the desktop app, so each reads apart. */
 function sectionGap(surface: RenderSurface): number {
   return surface === 'terminal' ? 1 : 2
+}
+
+/** Whether the panel is folded: the most recent choice made in any Clawd Watch mod. */
+async function isFolded($: EngineInterface): Promise<boolean> {
+  const choices = await Promise.all([read($, HUD_PANEL), read($, QUEUE_PANEL), read($, DOCK_PANEL)])
+  const latest = choices.reduce<Panel | null>(
+    (best, one) => (one && (!best || one.at > best.at) ? one : best),
+    null,
+  )
+
+  return latest?.isFolded ?? false
+}
+
+async function setFolded($: EngineInterface, isFolded: boolean) {
+  const choice = { isFolded, at: await $.clock.now() }
+  await Promise.all([update($, OWN_PANEL, () => choice), $.store.set(STORE_PANEL, choice)])
+}
+
+/** Restores the panel's last fold, kept across sessions. */
+async function loadFolded($: EngineInterface) {
+  const stored = (await $.store.get(STORE_PANEL)) as Panel | undefined
+  if (typeof stored?.isFolded === 'boolean' && typeof stored.at === 'number') {
+    await update($, OWN_PANEL, () => stored)
+  }
+}
+
+/** The folded panel's one line: what is running, queued or ready. */
+async function foldedSummary($: EngineInterface): Promise<string> {
+  const [agents, next, queued] = await Promise.all([
+    read($, SUBAGENTS),
+    read($, NEXT_SESSION),
+    read($, QUEUED),
+  ])
+  const running = agents.filter(run => run.status === 'running').length
+  const parts = [
+    running > 0 ? `${running} subagent${running === 1 ? '' : 's'} running` : '',
+    queued.length > 0 ? `${queued.length} queued` : '',
+    next?.phase === 'ready' ? 'next session ready' : '',
+  ]
+
+  return parts.filter(part => part !== '').join('  ·  ')
+}
+
+/** The panel's top row: its name, which folds or unfolds it, and when folded, the summary. */
+function panelBar($: EngineInterface, t: ElementTable, isFolded: boolean, summary: string) {
+  const { Box, Text, Button } = t
+
+  return (
+    <Box key={PANEL_KEY} flexDirection="row" gap={2} alignItems="center">
+      <Button
+        key="clawd-watch-fold"
+        plain
+        dimColor
+        hotkey="h"
+        label={`${isFolded ? '▸' : '▾'} ${PANEL_NAME}`}
+        onPress={() => setFolded($, !isFolded)}
+      />
+      {summary !== '' && (
+        <Box flexShrink={1} minWidth={0}>
+          <Text dimColor wrap="truncate-end">
+            {summary}
+          </Text>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+/**
+ * Places this mod's sections in the panel. The first mod to draw adds the panel's top row; folded,
+ * that row is all there is, and the other mods add nothing.
+ */
+async function inPanel(
+  $: EngineInterface,
+  t: ElementTable,
+  surface: RenderSurface,
+  above: JSX.Element,
+  content: JSX.Element,
+) {
+  const { Box } = t
+  const isFirst = !hasKey(above, PANEL_KEY)
+  const gap = hasContent(above) ? sectionGap(surface) : 0
+  const folded = await isFolded($)
+  if (folded && !isFirst) return above
+
+  return (
+    <Box flexDirection="column">
+      {above}
+      {isFirst && (
+        <Box flexDirection="column" marginTop={gap}>
+          {panelBar($, t, folded, folded ? await foldedSummary($) : '')}
+        </Box>
+      )}
+      {!folded && (
+        <Box flexDirection="column" marginTop={isFirst ? 1 : gap}>
+          {content}
+        </Box>
+      )}
+    </Box>
+  )
 }
 
 /** Whether the "Show in" setting (both, desktop or terminal) includes a surface. */
@@ -401,6 +515,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    await loadFolded($).catch(() => undefined)
     await Promise.all([
       $.command
         .register({
@@ -496,36 +611,33 @@ export const register: Register = (on, options) => {
       />
     )
 
-    return (
-      <Box flexDirection="column">
-        {above}
-        <Box flexDirection="column" marginTop={hasContent(above) ? sectionGap(e.surface) : 0}>
-          {section(
-            t,
-            'Skills',
-            <Box flexDirection="column">
-              <Box
-                flexDirection="row"
-                flexWrap={isText ? 'nowrap' : 'wrap'}
-                gap={isText ? 2 : 1}
-                alignItems="center"
-                overflow="hidden"
-              >
-                {chips.length === 0 && (
-                  <Text dimColor>Pin or use a skill and it shows up here</Text>
-                )}
-                {chipRow($, t, chips, isText)}
-              </Box>
-              {inline && (
-                <Box flexDirection="column" marginTop={1}>
-                  {skillList($, t, { list, pinned, used, at })}
-                </Box>
-              )}
-            </Box>,
-            { isStacked, aside: allButton, hasHint, isCentred: !inline },
+    return inPanel(
+      $,
+      t,
+      e.surface,
+      above,
+      section(
+        t,
+        DOCK_LABEL,
+        <Box flexDirection="column">
+          <Box
+            flexDirection="row"
+            flexWrap={isText ? 'nowrap' : 'wrap'}
+            gap={isText ? 2 : 1}
+            alignItems="center"
+            overflow="hidden"
+          >
+            {chips.length === 0 && <Text dimColor>Pin or use a skill and it shows up here</Text>}
+            {chipRow($, t, chips, isText)}
+          </Box>
+          {inline && (
+            <Box flexDirection="column" marginTop={1}>
+              {skillList($, t, { list, pinned, used, at })}
+            </Box>
           )}
-        </Box>
-      </Box>
+        </Box>,
+        { isStacked, aside: allButton, hasHint, isCentred: !inline },
+      ),
     )
   })
 

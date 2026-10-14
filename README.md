@@ -16,6 +16,8 @@ Clawd Watch keeps an eye on Claude Code while it works. Three small mods: see wh
 
 Each mod adds a section to the panel above the prompt. The sections share one layout, so together they read as a single panel.
 
+**Minimise it** when it's in the way: click **▾ Clawd Watch** at the top of the panel (in the terminal, press `h` after `ctrl+x tab`). It shrinks to one line that still says what's going on, such as *2 subagents running · 1 queued*. Click it again to bring the panel back. It stays the way you left it in new sessions.
+
 ## Install
 
 **Requirements:** a Claude Code build with mods (plugins of function hooks). These were built against Claude Code 2.1.288. The mods API is in early access and may change between releases.
@@ -111,13 +113,13 @@ Cmd+Enter then queues, and Shift+Enter still starts a new line. The terminal onl
 ## skill-dock
 
 ```
-Skills        [★ code-review] [★ pdf] [★ deep-research]  │  [simplify] [xlsx]   All skills (12) ›
+Favourite skills  ★ code-review  ★ pdf  ★ deep-research  │  simplify  xlsx      All skills (12) ›
 ```
 
 Your pinned skills and your most-used ones, one click away.
 
 - **Click a skill** to put `/skill-name` at the front of the prompt box, keeping anything you'd already typed. Add details and press Enter.
-- **★ Pinned skills** come first, then your most-used ones, as many as fit the width. "Most used" counts how often you used each skill in the last 30 days, whether you typed `/name` or Claude loaded it.
+- **★ Pinned skills** come first, then your most-used ones. In the desktop app every pin shows, wrapping onto a second row if needed; the terminal shows as many as fit one row. "Most used" counts how often you used each skill in the last 30 days, whether you typed `/name` or Claude loaded it.
 - **All skills ›** (or `/dock`) opens a side pane with three lists:
   - **Pinned**
   - **Most used:** your top 10

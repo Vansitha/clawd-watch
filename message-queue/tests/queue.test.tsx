@@ -207,3 +207,44 @@ test('a failed "Send next" keeps the queue paused, with the button still there',
   expect(await ui.find({ key: 'queue-send' })).toBeDefined()
   await ui.unmount()
 })
+
+test('the panel folds to one line that says what is waiting, and unfolds again', async ($, on) => {
+  engine(on)
+  // A store that keeps what's set, so the test can see the fold was saved.
+  const saved: Record<string, unknown> = {}
+  on('store.get', ($, e) => ({ value: saved[e.key] }))
+  on('store.set', ($, e) => ((saved[e.key] = e.value), { value: undefined }))
+  await $.turn.start({ text: 'build it', turnId: 't1' })
+  await $.prompt.submit(typed('first', true))
+  await $.prompt.submit(typed('second', true))
+
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...band, surface })
+    expect((await ui.find({ key: 'clawd-watch-fold' }))?.props.label).toBe('▾ Clawd Watch')
+    await ui.press({ key: 'clawd-watch-fold' })
+
+    expect((await ui.find({ key: 'clawd-watch-fold' }))?.props.label).toBe('▸ Clawd Watch')
+    expect(await ui.find({ type: 'Text', text: '2 queued' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'first' })).toBeUndefined()
+    expect((saved.panel as { isFolded: boolean } | undefined)?.isFolded).toBe(true)
+
+    await ui.press({ key: 'clawd-watch-fold' })
+    expect(await ui.find({ type: 'Text', text: 'first' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('a panel folded in an earlier session starts folded', async ($, on) => {
+  engine(on)
+  mock.store(on, { panel: { isFolded: true, at: 5 } })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.turn.start({ text: 'build it', turnId: 't1' })
+  await $.prompt.submit(typed('first', true))
+
+  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  expect((await ui.find({ key: 'clawd-watch-fold' }))?.props.label).toBe('▸ Clawd Watch')
+  expect(await ui.find({ type: 'Text', text: 'first' })).toBeUndefined()
+  await ui.unmount()
+})

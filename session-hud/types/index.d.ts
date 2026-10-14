@@ -29,12 +29,23 @@ export type Handoff =
       turnsSince: number
     }
 
+/** Whether the Clawd Watch panel is folded, and when that was chosen. Every mod keeps a copy. */
+export type Panel = { isFolded: boolean; at: number }
+
 declare module 'claude-code' {
   interface PluginState {
     'session-hud': {
       agents: AgentRun[]
       now: number
       handoff: Handoff | null
+      panel: Panel | null
+    }
+    'message-queue': {
+      messages: unknown[]
+      panel: Panel | null
+    }
+    'skill-dock': {
+      panel: Panel | null
     }
   }
 }

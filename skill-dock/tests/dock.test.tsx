@@ -75,6 +75,7 @@ test('pinned and frequently used skills sit in the dock, and a click fills the p
 
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ ...band, surface })
+    expect(await ui.find({ type: 'Text', text: 'Favourite skills' })).toBeDefined()
     expect((await ui.find({ key: 'dock-pin-anthropic-skills:pdf' }))?.props.label).toBe('★ pdf')
     expect((await ui.find({ key: 'dock-freq-simplify' }))?.props.label).toBe('simplify')
     expect(await ui.find({ key: 'dock-freq-clear' })).toBeUndefined()
