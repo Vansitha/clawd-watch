@@ -1,52 +1,22 @@
 import { atom, read, update } from 'claude-code'
-import type {
-  CommandInfo,
-  ElementTable,
-  EngineInterface,
-  Register,
-  RenderSurface,
-} from 'claude-code'
+import type { CommandInfo, ElementTable, EngineInterface, On } from 'claude-code'
 
-import type { PaneFilter, Panel, SkillEntry, SkillKind, Uses } from '../types'
+import type { PaneFilter, SkillEntry, SkillKind, Uses } from '../types'
+import { openPane } from './pane.js'
+import { LABEL_WIDTH, SECTION_GAP, cardFor, collapsedList, isActive, section } from './shared.js'
+import type { View } from './shared.js'
 
 type Chip = { name: string; label: string; isPinned: boolean }
 
-const pins = atom({ plugin: 'skill-dock', key: 'pins' } as const, [])
-const uses = atom({ plugin: 'skill-dock', key: 'uses' } as const, {})
-const skills = atom({ plugin: 'skill-dock', key: 'skills' } as const, [])
-const isInline = atom({ plugin: 'skill-dock', key: 'isInline' } as const, false)
-const hidden = atom({ plugin: 'skill-dock', key: 'hidden' } as const, [])
-const filter = atom({ plugin: 'skill-dock', key: 'filter' } as const, 'all')
-const query = atom({ plugin: 'skill-dock', key: 'query' } as const, '')
-const confirming = atom({ plugin: 'skill-dock', key: 'confirming' } as const, null)
+const pins = atom({ plugin: 'clawd-watch', key: 'pins' } as const, [])
+const uses = atom({ plugin: 'clawd-watch', key: 'uses' } as const, {})
+const skills = atom({ plugin: 'clawd-watch', key: 'skills' } as const, [])
+const isInline = atom({ plugin: 'clawd-watch', key: 'isInline' } as const, false)
+const hidden = atom({ plugin: 'clawd-watch', key: 'hidden' } as const, [])
+const filter = atom({ plugin: 'clawd-watch', key: 'filter' } as const, 'all')
+const query = atom({ plugin: 'clawd-watch', key: 'query' } as const, '')
+const confirming = atom({ plugin: 'clawd-watch', key: 'confirming' } as const, null)
 
-// Shared by every Clawd Watch mod; keep these identical across them.
-const LABEL_WIDTH = 17
-const NARROW_COLUMNS = 72
-const HINT_KEY = 'clawd-watch-hint'
-const HINT_TEXT = 'ctrl+x tab'
-/** The desktop app's cards: the prompt box's own border colour, and their inner spacing. */
-const CARD_BORDER = 'promptBorder'
-const CARD_PADDING = { x: 2, y: 1 }
-/** Rows between sections, and between cards. */
-const SECTION_GAP = 1
-const PANEL_KEY = 'clawd-watch-panel'
-const PANEL_NAME = 'Clawd Watch'
-const STORE_PANEL = 'panel'
-/** Each mod keeps its own copy of whether the panel is folded; the latest change wins. */
-const HUD_PANEL = atom({ plugin: 'session-hud', key: 'panel' } as const, null)
-const QUEUE_PANEL = atom({ plugin: 'message-queue', key: 'panel' } as const, null)
-const DOCK_PANEL = atom({ plugin: 'skill-dock', key: 'panel' } as const, null)
-/** What the folded panel sums up, read from the mods that own it. */
-const SUBAGENTS = atom({ plugin: 'session-hud', key: 'agents' } as const, [])
-const NEXT_SESSION = atom({ plugin: 'session-hud', key: 'handoff' } as const, null)
-const QUEUED = atom({ plugin: 'message-queue', key: 'messages' } as const, [])
-/** This mod's own copy, the one it writes. */
-const OWN_PANEL = atom({ plugin: 'skill-dock', key: 'panel' } as const, null)
-const OWN_CARDS = atom({ plugin: 'skill-dock', key: 'collapsedCards' } as const, [])
-const STORE_CARDS = 'collapsedCards'
-
-const PANE = 'skill-dock'
 const DOCK_LABEL = 'Favourite skills'
 const STORE_PINS = 'pins'
 const STORE_USES = 'uses'
@@ -72,8 +42,8 @@ const KIND_LABEL: Record<SkillKind, string> = {
   mine: 'Mine',
   installed: 'Installed',
 }
-/** Clawd Watch's own commands (/dock, /handoff, /queue) aren't skills. */
-const CLAWD_WATCH_MODS = ['session-hud', 'message-queue', 'skill-dock']
+/** Clawd Watch's own commands (/watch, /dock, /handoff, /queue) aren't skills; nor are the old mods'. */
+const CLAWD_WATCH_MODS = ['clawd-watch', 'session-hud', 'message-queue', 'skill-dock']
 const FILTERS: readonly PaneFilter[] = ['all', 'builtin', 'mine', 'installed', 'hidden']
 
 const DAY = 86_400_000
@@ -110,166 +80,6 @@ const local: {
   cwd?: string
   loaded?: Promise<void>
 } = { pins: [], uses: {}, known: [], hidden: [], removed: [], monthCounts: {} }
-
-/** Whether a drawn tree already holds an element with this key. */
-function hasKey(node: unknown, key: string): boolean {
-  if (!node || typeof node !== 'object') return false
-  const element = node as { props?: { key?: unknown }; children?: unknown[] }
-
-  return element.props?.key === key || (element.children ?? []).some(c => hasKey(c, key))
-}
-
-/** Whether another mod drew anything above this one. */
-function hasContent(tree: unknown): boolean {
-  return ((tree as { children?: unknown[] }).children?.length ?? 0) > 0
-}
-
-/** Whether the panel is folded: the most recent choice made in any Clawd Watch mod. */
-async function isFolded($: EngineInterface): Promise<boolean> {
-  const choices = await Promise.all([read($, HUD_PANEL), read($, QUEUE_PANEL), read($, DOCK_PANEL)])
-  const latest = choices.reduce<Panel | null>(
-    (best, one) => (one && (!best || one.at > best.at) ? one : best),
-    null,
-  )
-
-  return latest?.isFolded ?? false
-}
-
-async function setFolded($: EngineInterface, isFolded: boolean) {
-  const choice = { isFolded, at: await $.clock.now() }
-  await Promise.all([update($, OWN_PANEL, () => choice), $.store.set(STORE_PANEL, choice)])
-}
-
-/** Restores the panel's last fold, kept across sessions. */
-async function loadFolded($: EngineInterface) {
-  const stored = (await $.store.get(STORE_PANEL)) as Panel | undefined
-  if (typeof stored?.isFolded === 'boolean' && typeof stored.at === 'number') {
-    await update($, OWN_PANEL, () => stored)
-  }
-}
-
-/** Collapses a card, or opens it again, and keeps that for later sessions. */
-async function toggleCard($: EngineInterface, name: string) {
-  const list = await update($, OWN_CARDS, all =>
-    all.includes(name) ? all.filter(one => one !== name) : [...all, name],
-  )
-  await $.store.set(STORE_CARDS, list)
-}
-
-async function loadCards($: EngineInterface) {
-  const stored = await $.store.get(STORE_CARDS)
-  if (Array.isArray(stored)) {
-    await update($, OWN_CARDS, () => stored.filter((one): one is string => typeof one === 'string'))
-  }
-}
-
-/** A section's card in the desktop app, collapsed as it was left; the terminal draws no cards. */
-function cardFor(
-  $: EngineInterface,
-  isText: boolean,
-  collapsed: readonly string[],
-  name: string,
-): Card | undefined {
-  if (isText) return undefined
-
-  return {
-    key: `card-${name.toLowerCase().replace(/\W+/g, '-')}`,
-    isCollapsed: collapsed.includes(name),
-    onToggle: () => toggleCard($, name),
-  }
-}
-
-/** The folded panel's one line: what is running, queued or ready. */
-async function foldedSummary($: EngineInterface): Promise<string> {
-  const [agents, next, queued] = await Promise.all([
-    read($, SUBAGENTS),
-    read($, NEXT_SESSION),
-    read($, QUEUED),
-  ])
-  const running = agents.filter(run => run.status === 'running').length
-  const parts = [
-    running > 0 ? `${running} subagent${running === 1 ? '' : 's'} running` : '',
-    queued.length > 0 ? `${queued.length} queued` : '',
-    next?.phase === 'ready' ? 'next session ready' : '',
-  ]
-
-  return parts.filter(part => part !== '').join('  ·  ')
-}
-
-/** The panel's top row: its name, which folds or unfolds it, and when folded, the summary. */
-function panelBar($: EngineInterface, t: ElementTable, isFolded: boolean, summary: string) {
-  const { Box, Text, Button } = t
-
-  return (
-    <Box key={PANEL_KEY} flexDirection="row" gap={2} alignItems="center">
-      <Button
-        key="clawd-watch-fold"
-        plain
-        dimColor
-        hotkey="h"
-        label={`${isFolded ? '▸' : '▾'} ${PANEL_NAME}`}
-        onPress={() => setFolded($, !isFolded)}
-      />
-      {summary !== '' && (
-        <Box flexShrink={1} minWidth={0}>
-          <Text dimColor wrap="truncate-end">
-            {summary}
-          </Text>
-        </Box>
-      )}
-    </Box>
-  )
-}
-
-/**
- * Places this mod's sections in the panel. The first mod to draw adds the panel's top row; folded,
- * that row is all there is, and the other mods add nothing.
- */
-async function inPanel(
-  $: EngineInterface,
-  t: ElementTable,
-  above: JSX.Element,
-  content: JSX.Element,
-) {
-  const { Box } = t
-  const isFirst = !hasKey(above, PANEL_KEY)
-  const gap = hasContent(above) ? SECTION_GAP : 0
-  const folded = await isFolded($)
-  if (folded && !isFirst) return above
-
-  return (
-    <Box flexDirection="column">
-      {above}
-      {isFirst && (
-        <Box flexDirection="column" marginTop={gap}>
-          {panelBar($, t, folded, folded ? await foldedSummary($) : '')}
-        </Box>
-      )}
-      {!folded && (
-        <Box flexDirection="column" marginTop={isFirst ? 1 : gap}>
-          {content}
-        </Box>
-      )}
-    </Box>
-  )
-}
-
-/** Whether the "Show in" setting (both, desktop or terminal) includes a surface. */
-export function runsOn(showIn: string, surface: RenderSurface): boolean {
-  if (showIn === 'desktop') return surface !== 'terminal'
-  if (showIn === 'terminal') return surface === 'terminal'
-
-  return true
-}
-
-/** Whether the mod runs in this session, judged by the surfaces drawing it right now. */
-async function isActive($: EngineInterface, showIn: string): Promise<boolean> {
-  if (showIn === 'both') return true
-  const surfaces = await $.session.surfaces()
-
-  // Until a client attaches (the desktop app, the SDK) nothing rules the mod out.
-  return surfaces.length === 0 || surfaces.some(surface => runsOn(showIn, surface))
-}
 
 export function score(times: readonly number[] = [], at: number): number {
   return times.reduce((sum, t) => sum + Math.pow(0.5, (at - t) / HALF_LIFE), 0)
@@ -538,99 +348,11 @@ async function insertSkill($: EngineInterface, name: string) {
   if (!filled.isFilled) $.ui.toast(`Type /${name} to use it; the prompt box is busy.`)
 }
 
+/** Opens Clawd Watch's pane on all skills; where no pane can be placed, the list opens inline. */
 async function openAll($: EngineInterface) {
   await refreshSkills($)
-  const opened = await $.ui.open({ id: PANE, title: 'Skills' })
-
-  // Where no pane can be placed, the list opens inside the dock instead.
-  await update($, isInline, () => !opened.isPlaced)
-}
-
-/** A collapsible card's state and toggle, as the desktop app draws sections. */
-type Card = { key: string; isCollapsed: boolean; onToggle: () => unknown }
-
-/**
- * A band section. In the desktop app it is a card, as the app's own sidebar draws them: a title
- * whose chevron collapses it, `aside` at the right, the content below. In the terminal its name
- * sits in the shared left column (above the content when narrow), the content beside it and
- * `aside` at the far right.
- */
-function section(
-  t: ElementTable,
-  label: string,
-  content: JSX.Element,
-  layout: {
-    isStacked: boolean
-    aside?: JSX.Element
-    hasHint?: boolean
-    isCentred?: boolean
-    card?: Card
-  },
-) {
-  const { Box, Text, Button } = t
-  const { isStacked, aside, hasHint = false, isCentred = false, card } = layout
-  const hint = hasHint && (
-    <Box key={HINT_KEY}>
-      <Text dimColor italic>
-        {HINT_TEXT}
-      </Text>
-    </Box>
-  )
-
-  if (card) {
-    return (
-      <Box
-        flexDirection="column"
-        borderStyle="round"
-        borderColor={CARD_BORDER}
-        paddingX={CARD_PADDING.x}
-        paddingY={CARD_PADDING.y}
-      >
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
-          <Button
-            key={card.key}
-            plain
-            label={`${label}  ${card.isCollapsed ? '›' : '⌄'}`}
-            onPress={() => void card.onToggle()}
-          />
-          {aside}
-        </Box>
-        {!card.isCollapsed && (
-          <Box flexDirection="column" marginTop={1}>
-            {content}
-          </Box>
-        )}
-      </Box>
-    )
-  }
-
-  if (isStacked) {
-    return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
-          <Box flexDirection="row" gap={2} flexShrink={0}>
-            <Text dimColor>{label}</Text>
-            {hint}
-          </Box>
-          {aside}
-        </Box>
-        {content}
-      </Box>
-    )
-  }
-
-  return (
-    <Box flexDirection="row" gap={2} alignItems={isCentred && !hasHint ? 'center' : 'flex-start'}>
-      <Box flexDirection="column" flexShrink={0} width={LABEL_WIDTH}>
-        <Text dimColor>{label}</Text>
-        {hint}
-      </Box>
-      <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-        {content}
-      </Box>
-      {aside && <Box flexShrink={0}>{aside}</Box>}
-    </Box>
-  )
+  const isPlaced = await openPane($, 'skills')
+  await update($, isInline, () => !isPlaced)
 }
 
 const FILTER_LABEL: Record<PaneFilter, string> = {
@@ -652,7 +374,7 @@ async function listState($: EngineInterface) {
       read($, filter),
       read($, query),
       read($, confirming),
-      read($, OWN_CARDS),
+      collapsedList($),
       $.clock.now(),
     ])
 
@@ -807,7 +529,7 @@ function skillList(
       return section(t, name, body, {
         isStacked: true,
         aside: <Text dimColor>{detail}</Text>,
-        card: cardFor($, false, collapsed, name),
+        card: cardFor($, { isText: false, collapsed }, name),
       })
     }
 
@@ -918,28 +640,8 @@ function chipRow($: EngineInterface, t: ElementTable, chips: Chip[], isText: boo
   return row
 }
 
-export const register: Register = (on, options) => {
-  const showIn = String(options.show_in ?? 'both')
-
-  on('session.start', async ($, e, next) => {
-    const result = await next(e)
-    local.cwd = e.cwd
-    await Promise.all([loadFolded($), loadCards($)]).catch(() => undefined)
-    await Promise.all([
-      $.command
-        .register({
-          name: 'dock',
-          description: 'Show all your skills; pin favourites to the dock above the prompt',
-          argumentHint: '[pin | unpin | hide | unhide <skill>]',
-        })
-        .catch(() => undefined),
-      ensureLoaded($),
-    ])
-    await refreshSkills($)
-
-    return result
-  })
-
+/** The hooks behind the Favourite skills section, the skills list and /dock. */
+export function registerSkills(on: On, showIn: string) {
   on('skill.prompt', async ($, e, next) => {
     const result = await next(e)
     $.clock.after(0, () => void recordUse($, e.skill))
@@ -949,7 +651,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'dock' }, async ($, e) => {
     if (!(await isActive($, showIn))) {
-      return { text: `skill-dock is set to show in the ${showIn} only. Change it under /config.` }
+      return { text: `Clawd Watch is set to show in the ${showIn} only. Change it under /config.` }
     }
 
     const [verb, name] = (e.args ?? '').trim().split(/\s+/)
@@ -981,88 +683,89 @@ export const register: Register = (on, options) => {
 
     return { ...result, description: `${note} · ${result.description}` }
   })
+}
 
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Other mods' sections come first; this one follows, nearer the prompt.
-    const above = await next(e)
-    if (e.props.hasSurvey || !runsOn(showIn, e.surface)) return above
+/** The Favourite skills section: pinned and most-used skills, a click from the prompt. */
+export async function skillsSections(
+  $: EngineInterface,
+  t: ElementTable,
+  view: View,
+): Promise<JSX.Element[]> {
+  const [state, inline] = await Promise.all([listState($), read($, isInline)])
+  const { pinned, used, list, hiddenList, at } = state
+  const { Box, Text, Button } = t
+  const { isText, isStacked } = view
 
-    const [state, inline] = await Promise.all([listState($), read($, isInline)])
-    const { pinned, used, list, hiddenList, collapsed, at } = state
-    const t = $.ui.resolve(e)
-    const { Box, Text, Button } = t
-    const isText = e.surface === 'terminal'
-    const isStacked = !isText || e.props.bodyColumns < NARROW_COLUMNS
-    // The terminal takes no clicks outside fullscreen: say how to reach the buttons.
-    const hasHint = isText && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
+  const allLabel = inline ? 'Close' : `All skills (${list.length - hiddenList.length}) ›`
+  const shown = list.filter(s => !hiddenList.includes(s.name))
+  const candidates = [
+    ...pinned
+      .filter(name => !hiddenList.includes(name))
+      .map(name => ({ name, label: `★ ${short(name)}`, isPinned: true })),
+    ...frequent(shown, pinned, used, at, DOCK_FREQUENT).map(s => ({
+      name: s.name,
+      label: short(s.name),
+      isPinned: false,
+    })),
+  ]
+  // The desktop app wraps the chips, so every pin shows. The terminal keeps one row of the
+  // chips that fit; the rest are a click away in All skills.
+  const room =
+    view.columns - (isStacked ? 0 : LABEL_WIDTH + LABEL_GAP + allLabel.length) - ROW_SLACK
+  const chips = isText ? fitChips(candidates, room, CHIP_PADDING_TEXT) : candidates
+  const allButton = (
+    <Button
+      key="dock-all"
+      plain
+      dimColor
+      label={allLabel}
+      onPress={() => (inline ? update($, isInline, () => false) : openAll($))}
+    />
+  )
 
-    const allLabel = inline ? 'Close' : `All skills (${list.length - hiddenList.length}) ›`
-    const shown = list.filter(s => !hiddenList.includes(s.name))
-    const candidates = [
-      ...pinned
-        .filter(name => !hiddenList.includes(name))
-        .map(name => ({ name, label: `★ ${short(name)}`, isPinned: true })),
-      ...frequent(shown, pinned, used, at, DOCK_FREQUENT).map(s => ({
-        name: s.name,
-        label: short(s.name),
-        isPinned: false,
-      })),
-    ]
-    // The desktop app wraps the chips, so every pin shows. The terminal keeps one row of the
-    // chips that fit; the rest are a click away in All skills.
-    const room =
-      e.props.bodyColumns - (isStacked ? 0 : LABEL_WIDTH + LABEL_GAP + allLabel.length) - ROW_SLACK
-    const chips = isText ? fitChips(candidates, room, CHIP_PADDING_TEXT) : candidates
-    const allButton = (
-      <Button
-        key="dock-all"
-        plain
-        dimColor
-        label={allLabel}
-        onPress={() => (inline ? update($, isInline, () => false) : openAll($))}
-      />
-    )
-
-    return inPanel(
-      $,
+  return [
+    section(
       t,
-      above,
-      section(
-        t,
-        DOCK_LABEL,
-        <Box flexDirection="column">
-          <Box
-            flexDirection="row"
-            flexWrap={isText ? 'nowrap' : 'wrap'}
-            gap={isText ? 2 : 1}
-            alignItems="center"
-            overflow="hidden"
-          >
-            {chips.length === 0 && <Text dimColor>Pin or use a skill and it shows up here</Text>}
-            {chipRow($, t, chips, isText)}
+      DOCK_LABEL,
+      <Box flexDirection="column">
+        <Box
+          flexDirection="row"
+          flexWrap={isText ? 'nowrap' : 'wrap'}
+          gap={isText ? 2 : 1}
+          alignItems="center"
+          overflow="hidden"
+        >
+          {chips.length === 0 && <Text dimColor>Pin or use a skill and it shows up here</Text>}
+          {chipRow($, t, chips, isText)}
+        </Box>
+        {inline && (
+          <Box flexDirection="column" marginTop={1}>
+            {skillList($, t, state, { isText, hasCards: false })}
           </Box>
-          {inline && (
-            <Box flexDirection="column" marginTop={1}>
-              {skillList($, t, state, { isText, hasCards: false })}
-            </Box>
-          )}
-        </Box>,
-        {
-          isStacked,
-          aside: allButton,
-          hasHint,
-          isCentred: !inline,
-          card: cardFor($, isText, collapsed, DOCK_LABEL),
-        },
-      ),
-    )
-  })
+        )}
+      </Box>,
+      { isStacked, aside: allButton, isCentred: !inline, card: cardFor($, view, DOCK_LABEL) },
+    ),
+  ]
+}
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    if (!runsOn(showIn, e.surface)) return next(e)
+/** Every skill, searchable and filtered by kind: the pane's skills view. */
+export async function allSkills($: EngineInterface, t: ElementTable, view: View) {
+  return skillList($, t, await listState($), { isText: view.isText, hasCards: !view.isText })
+}
 
-    const isText = e.surface === 'terminal'
-
-    return skillList($, $.ui.resolve(e), await listState($), { isText, hasCards: !isText })
-  })
+/** At session start: /dock, what was saved, and the skills this session has. */
+export async function startSkills($: EngineInterface, cwd: string) {
+  local.cwd = cwd
+  await Promise.all([
+    $.command
+      .register({
+        name: 'dock',
+        description: 'Show all your skills in Clawd Watch: search, pin, hide or remove them',
+        argumentHint: '[pin | unpin | hide | unhide <skill>]',
+      })
+      .catch(() => undefined),
+    ensureLoaded($),
+  ])
+  await refreshSkills($)
 }

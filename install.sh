@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Installs the Clawd Watch mods for every Claude Code session (terminal and desktop app):
-# keeps a clone of this repo and lists each mod in CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json.
+# Installs Clawd Watch for every Claude Code session (terminal and desktop app): keeps a clone
+# of this repo, which is the plugin, and lists it in CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json.
 #
 #   ./install.sh                  install, or update an existing install
-#   ./install.sh --only desktop   run the mods in the Claude desktop app only
-#   ./install.sh --only terminal  run the mods in the terminal only
-#   ./install.sh --only both      run them in both (the default)
-#   ./install.sh --uninstall      remove the mods from settings.json (the clone stays)
+#   ./install.sh --only desktop   run Clawd Watch in the Claude desktop app only
+#   ./install.sh --only terminal  run it in the terminal only
+#   ./install.sh --only both      run it in both (the default)
+#   ./install.sh --uninstall      remove it from settings.json (the clone stays)
 #
 # Without --only, a person running it is asked; otherwise the last choice is kept.
 # Set CLAWD_WATCH_DIR to keep the clone somewhere other than ~/.claude/mods/clawd-watch.
@@ -14,7 +14,9 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/Vansitha/clawd-watch.git"
-MODS="session-hud message-queue skill-dock"
+PLUGIN="clawd-watch"
+# The mods Clawd Watch was split into before: an install replaces them.
+OLD_MODS="session-hud message-queue skill-dock"
 SETTINGS="$HOME/.claude/settings.json"
 ONLY_USAGE="--only takes desktop, terminal or both"
 
@@ -55,7 +57,7 @@ esac
 
 # Use the clone this script is in; otherwise clone (or update) the default one.
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
-if [ -n "$here" ] && [ -f "$here/${MODS%% *}/.claude-plugin/plugin.json" ]; then
+if [ -n "$here" ] && grep -qs "\"name\": \"$PLUGIN\"" "$here/.claude-plugin/plugin.json"; then
   dir="$here"
 else
   dir="${CLAWD_WATCH_DIR:-$HOME/.claude/mods/clawd-watch}"
@@ -84,10 +86,10 @@ if [ "$mode" = "install" ]; then
   fi
 fi
 
-# Ask a person where the mods should run; an agent or script passes --only instead.
+# Ask a person where Clawd Watch should run; an agent or script passes --only instead.
 if [ "$mode" = "install" ] && [ -z "$show_in" ] && [ -t 0 ] && [ -t 1 ]; then
   echo
-  echo "Where should the mods run?"
+  echo "Where should Clawd Watch run?"
   echo "  1) The desktop app and the terminal (default)"
   echo "  2) The desktop app only"
   echo "  3) The terminal only"
@@ -101,17 +103,19 @@ if [ "$mode" = "install" ] && [ -z "$show_in" ] && [ -t 0 ] && [ -t 1 ]; then
 fi
 
 # The settings.json edit, written twice because either node or python3 may be all there is.
-# Both take: <file> <install|uninstall> <clone dir> <show_in or ""> <mods, space-separated>.
-# - Any copy of a mod in env.CLAUDE_CODE_PLUGIN_DIRS (this clone, another one, or an install from
-#   before the rename) is removed; install then adds this clone's, so each mod loads once.
-# - Install with a show_in sets pluginConfigs.<mod>.options.show_in, the row /config edits;
-#   uninstall removes each mod's pluginConfigs entry.
+# Both take: <file> <install|uninstall> <clone dir> <show_in or ""> <plugin> <old mods, space-separated>.
+# - Any copy of Clawd Watch or of the old mods in env.CLAUDE_CODE_PLUGIN_DIRS (this clone, another
+#   one, an install from before a rename) is removed; install then adds this clone, so it loads once.
+# - Install sets pluginConfigs.<plugin>.options.show_in, the row /config edits: to the show_in given,
+#   or else to what an old mod had, if Clawd Watch has none yet. The old mods' entries go.
+# - Uninstall removes the plugin's and the old mods' pluginConfigs entries.
 # - Everything else in the file is kept. A file that isn't a JSON object is left alone (exit 3).
 EDIT_JS=$(
   cat <<'JS'
 const fs = require("fs");
-const [file, mode, dir, showIn, modList] = process.argv.slice(1);
-const mods = modList.split(" ");
+const [file, mode, dir, showIn, plugin, oldList] = process.argv.slice(1);
+const old = oldList.split(" ");
+const names = [plugin, ...old];
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const refuse = why => { console.error(`${file} ${why}, so it was left alone.`); process.exit(3); };
 
@@ -128,24 +132,27 @@ if (text.trim()) {
 }
 
 const env = isObject(settings.env) ? settings.env : {};
-const isCopy = path => mods.includes(path.replace(/\/+$/, "").split("/").pop());
+const trim = path => path.replace(/\/+$/, "");
+const isCopy = path => trim(path) === trim(dir) || names.includes(trim(path).split("/").pop());
 const dirs = (env.CLAUDE_CODE_PLUGIN_DIRS || "").split(":").filter(p => p && !isCopy(p));
-if (mode === "install") dirs.push(...mods.map(mod => `${dir}/${mod}`));
+if (mode === "install") dirs.push(dir);
 if (dirs.length) env.CLAUDE_CODE_PLUGIN_DIRS = dirs.join(":");
 else delete env.CLAUDE_CODE_PLUGIN_DIRS;
 if (Object.keys(env).length) settings.env = env;
 else delete settings.env;
 
 const configs = isObject(settings.pluginConfigs) ? settings.pluginConfigs : {};
-for (const mod of mods) {
-  if (mode === "uninstall") {
-    delete configs[mod];
-  } else if (showIn) {
-    const entry = isObject(configs[mod]) ? configs[mod] : {};
-    const options = isObject(entry.options) ? entry.options : {};
-    configs[mod] = { ...entry, options: { ...options, show_in: showIn } };
-  }
+const optionsOf = name =>
+  isObject(configs[name]) && isObject(configs[name].options) ? configs[name].options : {};
+if (mode === "install") {
+  const carried = old.map(name => optionsOf(name).show_in).find(value => typeof value === "string");
+  const chosen = showIn || optionsOf(plugin).show_in || carried;
+  const entry = isObject(configs[plugin]) ? configs[plugin] : {};
+  if (chosen) configs[plugin] = { ...entry, options: { ...optionsOf(plugin), show_in: chosen } };
+} else {
+  delete configs[plugin];
 }
+for (const name of old) delete configs[name];
 if (Object.keys(configs).length) settings.pluginConfigs = configs;
 else delete settings.pluginConfigs;
 
@@ -155,8 +162,9 @@ JS
 EDIT_PY=$(
   cat <<'PY'
 import json, sys
-file, mode, dir, show_in, mod_list = sys.argv[1:6]
-mods = mod_list.split()
+file, mode, dir, show_in, plugin, old_list = sys.argv[1:7]
+old = old_list.split()
+names = [plugin, *old]
 
 def refuse(why):
     print(f"{file} {why}, so it was left alone.", file=sys.stderr)
@@ -180,10 +188,10 @@ if text.strip():
         refuse("is not a JSON object")
 
 env = settings.get("env") if isinstance(settings.get("env"), dict) else {}
-is_copy = lambda path: path.rstrip("/").split("/")[-1] in mods
+is_copy = lambda path: path.rstrip("/") == dir.rstrip("/") or path.rstrip("/").split("/")[-1] in names
 dirs = [p for p in (env.get("CLAUDE_CODE_PLUGIN_DIRS") or "").split(":") if p and not is_copy(p)]
 if mode == "install":
-    dirs += [f"{dir}/{mod}" for mod in mods]
+    dirs.append(dir)
 if dirs:
     env["CLAUDE_CODE_PLUGIN_DIRS"] = ":".join(dirs)
 else:
@@ -194,13 +202,19 @@ else:
     settings.pop("env", None)
 
 configs = settings.get("pluginConfigs") if isinstance(settings.get("pluginConfigs"), dict) else {}
-for mod in mods:
-    if mode == "uninstall":
-        configs.pop(mod, None)
-    elif show_in:
-        entry = configs.get(mod) if isinstance(configs.get(mod), dict) else {}
-        options = entry.get("options") if isinstance(entry.get("options"), dict) else {}
-        configs[mod] = {**entry, "options": {**options, "show_in": show_in}}
+def options_of(name):
+    entry = configs.get(name)
+    return entry["options"] if isinstance(entry, dict) and isinstance(entry.get("options"), dict) else {}
+if mode == "install":
+    carried = next((options_of(n)["show_in"] for n in old if isinstance(options_of(n).get("show_in"), str)), None)
+    chosen = show_in or options_of(plugin).get("show_in") or carried
+    entry = configs.get(plugin) if isinstance(configs.get(plugin), dict) else {}
+    if chosen:
+        configs[plugin] = {**entry, "options": {**options_of(plugin), "show_in": chosen}}
+else:
+    configs.pop(plugin, None)
+for name in old:
+    configs.pop(name, None)
 if configs:
     settings["pluginConfigs"] = configs
 else:
@@ -230,62 +244,43 @@ if [ -f "$SETTINGS" ]; then
 fi
 
 case "$editor" in
-  node) node -e "$EDIT_JS" "$SETTINGS" "$mode" "$dir" "$show_in" "$MODS" ;;
-  python3) python3 -c "$EDIT_PY" "$SETTINGS" "$mode" "$dir" "$show_in" "$MODS" ;;
+  node) node -e "$EDIT_JS" "$SETTINGS" "$mode" "$dir" "$show_in" "$PLUGIN" "$OLD_MODS" ;;
+  python3) python3 -c "$EDIT_PY" "$SETTINGS" "$mode" "$dir" "$show_in" "$PLUGIN" "$OLD_MODS" ;;
   *)
     echo "Neither node nor python3 is installed, so settings.json was not changed."
-    echo "Add these paths to env.CLAUDE_CODE_PLUGIN_DIRS in $SETTINGS yourself, separated by ':'"
-    for mod in $MODS; do
-      echo "  $dir/$mod"
-    done
+    echo "Add this path to env.CLAUDE_CODE_PLUGIN_DIRS in $SETTINGS yourself, separated by ':'"
+    echo "  $dir"
     exit 1
     ;;
 esac || fail "settings.json was not changed."
 
 if [ "$mode" = "uninstall" ]; then
-  echo "✓ Removed the mods from $SETTINGS (old copy: $SETTINGS.bak)."
-  echo "  Start a new Claude Code session to unload them. To delete the files too: rm -rf $dir"
+  echo "✓ Removed Clawd Watch from $SETTINGS (old copy: $SETTINGS.bak)."
+  echo "  Start a new Claude Code session to unload it. To delete the files too: rm -rf $dir"
   exit 0
 fi
 
 echo "✓ Added to $SETTINGS (old copy: $SETTINGS.bak):"
-for mod in $MODS; do
-  echo "    $dir/$mod"
-done
+echo "    $dir"
 case "$show_in" in
-  desktop) echo "✓ The mods run in the desktop app only." ;;
-  terminal) echo "✓ The mods run in the terminal only." ;;
-  both) echo "✓ The mods run in the desktop app and the terminal." ;;
-  *) echo "✓ Kept where the mods run as it was (the desktop app and the terminal unless you chose otherwise)." ;;
+  desktop) echo "✓ Clawd Watch runs in the desktop app only." ;;
+  terminal) echo "✓ Clawd Watch runs in the terminal only." ;;
+  both) echo "✓ Clawd Watch runs in the desktop app and the terminal." ;;
+  *) echo "✓ Kept where Clawd Watch runs as it was (the desktop app and the terminal unless you chose otherwise)." ;;
 esac
 echo "  Change it any time: run this again with --only, or open /config in Claude Code (\"Show in\")."
 
-# Check each mod the way Claude Code will load it, all at once: each check starts the CLI.
+# Check the plugin the way Claude Code will load it.
 if command -v claude >/dev/null 2>&1; then
-  pids=()
-  for mod in $MODS; do
-    claude plugin validate "$dir/$mod" >/dev/null 2>&1 &
-    pids+=("$!")
-  done
-
-  failed=0
-  index=0
-  for mod in $MODS; do
-    if wait "${pids[$index]}"; then
-      echo "✓ $mod is valid"
-    else
-      echo "✗ $mod did not validate: run 'claude plugin validate $dir/$mod' to see why"
-      failed=1
-    fi
-    index=$((index + 1))
-  done
-
-  if [ "$failed" = 1 ]; then
-    echo "Some mods did not validate. This Claude Code ($(claude --version 2>/dev/null | head -1)) may be too old: update it and run this again."
+  if claude plugin validate "$dir" >/dev/null 2>&1; then
+    echo "✓ Clawd Watch is valid"
+  else
+    echo "✗ Clawd Watch did not validate: run 'claude plugin validate $dir' to see why"
+    echo "  This Claude Code ($(claude --version 2>/dev/null | head -1)) may be too old: update it and run this again."
     exit 1
   fi
 else
-  echo "! The claude command isn't on your PATH, so the mods weren't checked. They load the next time Claude Code starts."
+  echo "! The claude command isn't on your PATH, so Clawd Watch wasn't checked. It loads the next time Claude Code starts."
 fi
 
-echo "Done. Start a new Claude Code session (quit and reopen the desktop app) to load the mods."
+echo "Done. Start a new Claude Code session (quit and reopen the desktop app) to load Clawd Watch."

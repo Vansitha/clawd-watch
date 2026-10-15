@@ -1,6 +1,12 @@
 import { expect, mock, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+
 import type { AgentRun } from '../types'
-import { clockTime, correction, describeCall, estimate, parseSize } from '../hooks/register'
+import { clockTime, correction, describeCall, estimate, parseSize } from '../hooks/subagents'
+import { band, pane, panel } from './views'
+
+/** The test runner's timer, for letting a background answer land. */
+declare const setTimeout: (done: (value?: unknown) => void, ms: number) => unknown
 
 const usage = {
   input_tokens: 1,
@@ -8,19 +14,6 @@ const usage = {
   cache_read_input_tokens: 0,
   cache_creation_input_tokens: 0,
 }
-
-const band = (bodyColumns = 120) => ({
-  plugin: 'session-hud',
-  component: 'AbovePrompt' as const,
-  props: {
-    hasSurvey: false,
-    isWorking: false,
-    maxRows: 12,
-    bodyColumns,
-    scroll: { offset: 0, bodyRows: 11 },
-    view: {},
-  },
-})
 
 test("with nothing running the band adds nothing and keeps other mods' rows", async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
@@ -40,7 +33,7 @@ test("with nothing running the band adds nothing and keeps other mods' rows", as
   })
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...band(), surface })
+    const ui = await $.ui.mount(band(surface))
     expect(await ui.find({ type: 'Text', text: 'another mod' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /5-hour|43%/ })).toBeUndefined()
     await ui.unmount()
@@ -77,7 +70,7 @@ test('/handoff writes a starter prompt and the pill clears and starts it', async
     })
     await clock.advance(10)
 
-    const ui = await $.ui.mount({ ...band(), surface })
+    const ui = await $.ui.mount(panel(surface))
     expect(await ui.find({ type: 'Text', text: 'Build the login page' })).toBeDefined()
     const start = await ui.find({ key: 'handoff-start' })
     expect(start?.props.plain).toBe(surface === 'terminal' ? true : undefined)
@@ -114,7 +107,7 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
   })
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    const view = await $.ui.mount({ ...band(), surface })
+    const view = await $.ui.mount(panel(surface))
     // The desktop app draws the section as a card whose title collapses it.
     const title =
       surface === 'terminal'
@@ -122,9 +115,8 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
         : await view.find({ key: 'card-subagents' })
     expect(title).toBeDefined()
     expect(await view.find({ type: 'Text', text: /^All done by ~/ })).toBeDefined()
-    // The terminal says when each row will be done; the desktop lines the times up in a column.
-    const rowTime = surface === 'terminal' ? /^done by ~/ : /^~\d/
-    expect(await view.find({ type: 'Text', text: rowTime })).toBeDefined()
+    // A narrow pane and the terminal say when each row will be done, under its name.
+    expect(await view.find({ type: 'Text', text: /^done by ~/ })).toBeDefined()
     expect(await view.find({ type: 'Text', text: /Find auth handlers/ })).toBeDefined()
     // A progress bar: rounded SVG on the desktop, a run of blocks in the terminal.
     if (surface === 'desktop') expect(await view.find({ type: 'Svg' })).toBeDefined()
@@ -132,7 +124,12 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
     await view.unmount()
   }
 
-  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+  // A wide pane gives each subagent one line, its time in a column.
+  const wide = await $.ui.mount(pane('desktop', 100))
+  expect(await wide.find({ type: 'Text', text: /^~\d/ })).toBeDefined()
+  await wide.unmount()
+
+  const ui = await $.ui.mount(pane('desktop'))
 
   // The bar follows the clock even when nothing else changes; no countdown ticks beside it.
   const before = (await ui.find({ type: 'Svg' }))?.props.source
@@ -200,11 +197,11 @@ test(
       fork: false,
     })
 
-    const terminal = await $.ui.mount({ ...band(), surface: 'terminal' })
+    const terminal = await $.ui.mount(band('terminal'))
     expect(await terminal.find({ type: 'Text', text: 'Subagents' })).toBeUndefined()
     await terminal.unmount()
 
-    const desktop = await $.ui.mount({ ...band(), surface: 'desktop' })
+    const desktop = await $.ui.mount(pane('desktop'))
     expect(await desktop.find({ key: 'card-subagents' })).toBeDefined()
     await desktop.unmount()
   },
@@ -213,7 +210,7 @@ test(
 test('a background subagent that ends unseen is marked done from the agent list', async ($, on) => {
   const clock = mock.clock(on, { now: 2_000_000 })
   mock.store(on)
-  let status = 'running'
+  let status: 'running' | 'completed' = 'running'
   on('agent.spawn', () => ({ model: 'm', agentId: 'agent-1' }))
   on('agent.list', () => ({
     value: [{ id: 'agent-1', description: 'd', type: 'Explore', status }],
@@ -233,7 +230,7 @@ test('a background subagent that ends unseen is marked done from the agent list'
     fork: false,
   })
 
-  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+  const ui = await $.ui.mount(pane('desktop'))
   await clock.advance(10_000)
   expect(await ui.find({ type: 'Text', text: /^All done by ~/ })).toBeDefined()
 
@@ -266,7 +263,7 @@ test('a spawn that fails leaves no row behind', async ($, on) => {
     })
     .catch(() => undefined)
 
-  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+  const ui = await $.ui.mount(pane('desktop'))
   expect(await ui.find({ key: 'card-subagents' })).toBeUndefined()
   await ui.unmount()
 })
@@ -282,7 +279,7 @@ const spawnArgs = (prompt: string) => ({
   fork: false,
 })
 
-function hudEngine(on: Parameters<Parameters<typeof test>[1]>[1], now: number) {
+function hudEngine(on: On, now: number) {
   mock.clock(on, { now })
   mock.store(on)
   on('agent.spawn', () => ({ model: 'm', agentId: 'agent-1' }))
@@ -308,7 +305,7 @@ test('Claude sizes each task; the row says estimating until it answers', async (
   })
 
   await $.agent.spawn(spawnArgs('Fix the six notch issues listed in notch.md, then run the tests.'))
-  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
+  const ui = await $.ui.mount(pane('desktop'))
   expect(asked).toContain('Fix six notch UI issues')
   expect(asked).toContain('notch.md')
   expect(await ui.find({ type: 'Text', text: 'estimating…' })).toBeDefined()
@@ -317,7 +314,7 @@ test('Claude sizes each task; the row says estimating until it answers', async (
   answer()
   await new Promise(resolve => setTimeout(resolve, 20))
   expect(
-    await ui.find({ type: 'Text', text: new RegExp(`^~${clockTime(NOW + 600_000)}$`) }),
+    await ui.find({ type: 'Text', text: `done by ~${clockTime(NOW + 600_000)}` }),
   ).toBeDefined()
   expect(
     await ui.find({ type: 'Text', text: `All done by ~${clockTime(NOW + 600_000)}` }),
@@ -339,8 +336,8 @@ test('when sizing fails, the estimate from past runs shows', async ($, on) => {
 
   await $.agent.spawn(spawnArgs('p'))
   await new Promise(resolve => setTimeout(resolve, 20))
-  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /^~\d/ })).toBeDefined()
+  const ui = await $.ui.mount(pane('desktop'))
+  expect(await ui.find({ type: 'Text', text: /^done by ~/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'estimating…' })).toBeUndefined()
   await ui.unmount()
 })
@@ -358,16 +355,24 @@ test("Claude's guesses are read safely and corrected by how past runs went", () 
   expect(correction([sample(1000, 1), sample(1000, 1), sample(1000, 1)], ratio)).toBe(4)
 })
 
-test('folded, the panel still says how many subagents are running', async ($, on) => {
+test('one line says how many subagents are running: the closed panel, and the folded band', async ($, on) => {
   hudEngine(on, 2_000_000)
   on('model.complete', () => ({
     value: { isAnswered: true as const, text: '<minutes>5</minutes><steps>40</steps>', usage },
   }))
   await $.agent.spawn(spawnArgs('p'))
 
-  const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
-  await ui.press({ key: 'clawd-watch-fold' })
-  expect(await ui.find({ type: 'Text', text: '1 subagent running' })).toBeDefined()
-  expect(await ui.find({ key: 'card-subagents' })).toBeUndefined()
-  await ui.unmount()
+  // The desktop app, its pane closed: one line, which opens the pane.
+  const desktop = await $.ui.mount(band('desktop'))
+  expect(await desktop.find({ type: 'Text', text: '1 subagent running' })).toBeDefined()
+  expect(await desktop.find({ key: 'card-subagents' })).toBeUndefined()
+  expect((await desktop.find({ key: 'clawd-watch-open' }))?.props.label).toBe('Open panel')
+  await desktop.unmount()
+
+  // The terminal, folded.
+  const terminal = await $.ui.mount(band('terminal'))
+  await terminal.press({ key: 'clawd-watch-fold' })
+  expect(await terminal.find({ type: 'Text', text: '1 subagent running' })).toBeDefined()
+  expect(await terminal.find({ type: 'Text', text: 'Subagents' })).toBeUndefined()
+  await terminal.unmount()
 })

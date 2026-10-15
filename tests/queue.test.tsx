@@ -1,18 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-const band = {
-  plugin: 'message-queue',
-  component: 'AbovePrompt' as const,
-  props: {
-    hasSurvey: false,
-    isWorking: true,
-    maxRows: 20,
-    bodyColumns: 110,
-    scroll: { offset: 0, bodyRows: 19 },
-    view: {},
-  },
-}
+import { band, panel } from './views'
 
 /** The engine beneath the plugin: records what reaches the model, draws an empty band. */
 function engine(on: On, { failSubmit = false } = {}) {
@@ -58,7 +47,7 @@ test('the queue key holds a message until Claude finishes, then sends it', async
   expect(sent).toEqual([])
 
   for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount({ ...band, surface })
+    const ui = await $.ui.mount(panel(surface))
     expect(await ui.find({ type: 'Text', text: 'then add tests for it' })).toBeDefined()
     expect(
       await ui.find({ type: 'Text', text: 'Sent one at a time, each after Claude finishes.' }),
@@ -88,7 +77,7 @@ test('queued messages go one at a time, in order, and can be reordered', async (
   await $.prompt.submit(typed('third', true))
 
   // Move "third" ahead of "second".
-  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  const ui = await $.ui.mount(panel('desktop'))
   const ups = await ui.findAll({ type: 'Button', text: '↑' })
   expect(ups.length).toBe(2)
   await ui.press({ key: ups[1]!.key! })
@@ -140,7 +129,7 @@ test('stopping Claude pauses the queue until you send the next one', async ($, o
   await clock.advance(300)
   expect(sent).toEqual([])
 
-  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  const ui = await $.ui.mount(panel('desktop'))
   expect(await ui.find({ type: 'Text', text: 'Paused because you stopped Claude.' })).toBeDefined()
   await ui.press({ key: 'queue-send' })
   expect(sent).toEqual(['later please'])
@@ -160,7 +149,7 @@ test('/queue adds a message while Claude works', async ($, on) => {
   expect(out.text).toBe('Queued.')
   expect(sent).toEqual([])
 
-  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  const ui = await $.ui.mount(panel('desktop'))
   expect(await ui.find({ type: 'Text', text: 'write the changelog after' })).toBeDefined()
   await ui.unmount()
 })
@@ -171,7 +160,7 @@ test('emptying a paused queue un-pauses it, so later messages still go', async (
   await $.prompt.submit(typed('first', true))
   await $.turn.complete(finished('aborted'))
 
-  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  const ui = await $.ui.mount(panel('desktop'))
   const remove = await ui.find({ type: 'Button', text: '✕' })
   await ui.press({ key: remove!.key! })
   await ui.unmount()
@@ -190,7 +179,7 @@ test('a message that fails to send goes back to the front of the queue', async (
   await $.turn.complete(finished('answer'))
   await clock.advance(300)
 
-  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  const ui = await $.ui.mount(panel('desktop'))
   expect(await ui.find({ type: 'Text', text: 'keep me' })).toBeDefined()
   await ui.unmount()
 })
@@ -201,14 +190,14 @@ test('a failed "Send next" keeps the queue paused, with the button still there',
   await $.prompt.submit(typed('keep me', true))
   await $.turn.complete(finished('aborted'))
 
-  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  const ui = await $.ui.mount(panel('desktop'))
   await ui.press({ key: 'queue-send' })
   expect(await ui.find({ type: 'Text', text: 'keep me' })).toBeDefined()
   expect(await ui.find({ key: 'queue-send' })).toBeDefined()
   await ui.unmount()
 })
 
-test('the panel folds to one line that says what is waiting, and unfolds again', async ($, on) => {
+test('in the terminal the panel folds to one line that says what is waiting', async ($, on) => {
   engine(on)
   // A store that keeps what's set, so the test can see the fold was saved.
   const saved: Record<string, unknown> = {}
@@ -218,32 +207,31 @@ test('the panel folds to one line that says what is waiting, and unfolds again',
   await $.prompt.submit(typed('first', true))
   await $.prompt.submit(typed('second', true))
 
-  for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount({ ...band, surface })
-    expect((await ui.find({ key: 'clawd-watch-fold' }))?.props.label).toBe('▾ Clawd Watch')
-    await ui.press({ key: 'clawd-watch-fold' })
+  const ui = await $.ui.mount(band('terminal'))
+  expect((await ui.find({ key: 'clawd-watch-fold' }))?.props.label).toBe('▾ Clawd Watch')
+  await ui.press({ key: 'clawd-watch-fold' })
 
-    expect((await ui.find({ key: 'clawd-watch-fold' }))?.props.label).toBe('▸ Clawd Watch')
-    expect(await ui.find({ type: 'Text', text: '2 queued' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'first' })).toBeUndefined()
-    expect((saved.panel as { isFolded: boolean } | undefined)?.isFolded).toBe(true)
+  expect((await ui.find({ key: 'clawd-watch-fold' }))?.props.label).toBe('▸ Clawd Watch')
+  expect(await ui.find({ type: 'Text', text: '2 queued' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'first' })).toBeUndefined()
+  expect(saved.folded).toBe(true)
 
-    await ui.press({ key: 'clawd-watch-fold' })
-    expect(await ui.find({ type: 'Text', text: 'first' })).toBeDefined()
-    await ui.unmount()
-  }
+  await ui.press({ key: 'clawd-watch-fold' })
+  expect(await ui.find({ type: 'Text', text: 'first' })).toBeDefined()
+  await ui.unmount()
 })
 
 test('a panel folded in an earlier session starts folded', async ($, on) => {
   engine(on)
-  mock.store(on, { panel: { isFolded: true, at: 5 } })
+  mock.store(on, { folded: true })
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
-  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  on('command.list', () => ({ value: [] }))
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
   await $.turn.start({ text: 'build it', turnId: 't1' })
   await $.prompt.submit(typed('first', true))
 
-  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  const ui = await $.ui.mount(band('terminal'))
   expect((await ui.find({ key: 'clawd-watch-fold' }))?.props.label).toBe('▸ Clawd Watch')
   expect(await ui.find({ type: 'Text', text: 'first' })).toBeUndefined()
   await ui.unmount()
@@ -255,7 +243,7 @@ test('in the desktop app the queue is a card that collapses to its title', async
   await $.turn.start({ text: 'build it', turnId: 't1' })
   await $.prompt.submit(typed('first', true))
 
-  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  const ui = await $.ui.mount(panel('desktop'))
   expect((await ui.find({ key: 'card-queued' }))?.props.label).toBe('Queued (1)  ⌄')
   await ui.press({ key: 'card-queued' })
   expect((await ui.find({ key: 'card-queued' }))?.props.label).toBe('Queued (1)  ›')
@@ -263,7 +251,7 @@ test('in the desktop app the queue is a card that collapses to its title', async
   await ui.unmount()
 
   // The terminal draws no cards.
-  const terminal = await $.ui.mount({ ...band, surface: 'terminal' })
+  const terminal = await $.ui.mount(band('terminal'))
   expect(await terminal.find({ key: 'card-queued' })).toBeUndefined()
   expect(await terminal.find({ type: 'Text', text: 'first' })).toBeDefined()
   await terminal.unmount()

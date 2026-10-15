@@ -1,44 +1,35 @@
 import { atom, read, update } from 'claude-code'
-import type { ElementTable, EngineInterface, Register, RenderSurface, Timer } from 'claude-code'
+import type {
+  ElementTable,
+  EngineInterface,
+  On,
+  RenderSurface,
+  Timer,
+  TurnCompleteInput,
+} from 'claude-code'
 
-import type { AgentRun, Handoff, Panel } from '../types'
+import type { AgentRun, Handoff } from '../types'
+import {
+  ACCENT,
+  COMPACT_COLUMNS,
+  LABEL_WIDTH,
+  cardFor,
+  isActive,
+  plural,
+  section,
+} from './shared.js'
+import type { Card, View } from './shared.js'
 
 type ReadyHandoff = Extract<Handoff, { phase: 'ready' }>
 type Sample = { type: string; ms: number; steps: number; guessMs?: number; guessSteps?: number }
-type Style = { isText: boolean; isStacked: boolean; barCells: number }
+/** How the sections draw: text or graphics, name above or beside, narrow or not, bar length. */
+type Style = { isText: boolean; isStacked: boolean; isCompact: boolean; barCells: number }
 
-const agents = atom({ plugin: 'session-hud', key: 'agents' } as const, [])
-const now = atom({ plugin: 'session-hud', key: 'now' } as const, 0)
-const handoff = atom({ plugin: 'session-hud', key: 'handoff' } as const, null)
-
-// Shared by every Clawd Watch mod; keep these identical across them.
-const LABEL_WIDTH = 17
-const NARROW_COLUMNS = 72
-const HINT_KEY = 'clawd-watch-hint'
-const HINT_TEXT = 'ctrl+x tab'
-/** The desktop app's cards: the prompt box's own border colour, and their inner spacing. */
-const CARD_BORDER = 'promptBorder'
-const CARD_PADDING = { x: 2, y: 1 }
-/** Rows between sections, and between cards. */
-const SECTION_GAP = 1
-const PANEL_KEY = 'clawd-watch-panel'
-const PANEL_NAME = 'Clawd Watch'
-const STORE_PANEL = 'panel'
-/** Each mod keeps its own copy of whether the panel is folded; the latest change wins. */
-const HUD_PANEL = atom({ plugin: 'session-hud', key: 'panel' } as const, null)
-const QUEUE_PANEL = atom({ plugin: 'message-queue', key: 'panel' } as const, null)
-const DOCK_PANEL = atom({ plugin: 'skill-dock', key: 'panel' } as const, null)
-/** What the folded panel sums up, read from the mods that own it. */
-const SUBAGENTS = atom({ plugin: 'session-hud', key: 'agents' } as const, [])
-const NEXT_SESSION = atom({ plugin: 'session-hud', key: 'handoff' } as const, null)
-const QUEUED = atom({ plugin: 'message-queue', key: 'messages' } as const, [])
-/** This mod's own copy, the one it writes. */
-const OWN_PANEL = atom({ plugin: 'session-hud', key: 'panel' } as const, null)
-const OWN_CARDS = atom({ plugin: 'session-hud', key: 'collapsedCards' } as const, [])
-const STORE_CARDS = 'collapsedCards'
+const agents = atom({ plugin: 'clawd-watch', key: 'agents' } as const, [])
+const now = atom({ plugin: 'clawd-watch', key: 'now' } as const, 0)
+const handoff = atom({ plugin: 'clawd-watch', key: 'handoff' } as const, null)
 
 // Colors that read on both light and dark backgrounds.
-const ACCENT = '#d97757'
 const SUCCESS = '#5fa865'
 const ERROR = '#d9534f'
 const BAR_TRACK = '#8b8b8b'
@@ -150,166 +141,6 @@ const local: {
   ticker?: Timer
   history?: Sample[]
 } = { contextPercent: 0, turnsSinceCheck: 0, isChecking: false, wasLive: false, ticks: 0 }
-
-/** Whether a drawn tree already holds an element with this key. */
-function hasKey(node: unknown, key: string): boolean {
-  if (!node || typeof node !== 'object') return false
-  const element = node as { props?: { key?: unknown }; children?: unknown[] }
-
-  return element.props?.key === key || (element.children ?? []).some(c => hasKey(c, key))
-}
-
-/** Whether another mod drew anything above this one. */
-function hasContent(tree: unknown): boolean {
-  return ((tree as { children?: unknown[] }).children?.length ?? 0) > 0
-}
-
-/** Whether the panel is folded: the most recent choice made in any Clawd Watch mod. */
-async function isFolded($: EngineInterface): Promise<boolean> {
-  const choices = await Promise.all([read($, HUD_PANEL), read($, QUEUE_PANEL), read($, DOCK_PANEL)])
-  const latest = choices.reduce<Panel | null>(
-    (best, one) => (one && (!best || one.at > best.at) ? one : best),
-    null,
-  )
-
-  return latest?.isFolded ?? false
-}
-
-async function setFolded($: EngineInterface, isFolded: boolean) {
-  const choice = { isFolded, at: await $.clock.now() }
-  await Promise.all([update($, OWN_PANEL, () => choice), $.store.set(STORE_PANEL, choice)])
-}
-
-/** Restores the panel's last fold, kept across sessions. */
-async function loadFolded($: EngineInterface) {
-  const stored = (await $.store.get(STORE_PANEL)) as Panel | undefined
-  if (typeof stored?.isFolded === 'boolean' && typeof stored.at === 'number') {
-    await update($, OWN_PANEL, () => stored)
-  }
-}
-
-/** Collapses a card, or opens it again, and keeps that for later sessions. */
-async function toggleCard($: EngineInterface, name: string) {
-  const list = await update($, OWN_CARDS, all =>
-    all.includes(name) ? all.filter(one => one !== name) : [...all, name],
-  )
-  await $.store.set(STORE_CARDS, list)
-}
-
-async function loadCards($: EngineInterface) {
-  const stored = await $.store.get(STORE_CARDS)
-  if (Array.isArray(stored)) {
-    await update($, OWN_CARDS, () => stored.filter((one): one is string => typeof one === 'string'))
-  }
-}
-
-/** A section's card in the desktop app, collapsed as it was left; the terminal draws no cards. */
-function cardFor(
-  $: EngineInterface,
-  isText: boolean,
-  collapsed: readonly string[],
-  name: string,
-): Card | undefined {
-  if (isText) return undefined
-
-  return {
-    key: `card-${name.toLowerCase().replace(/\W+/g, '-')}`,
-    isCollapsed: collapsed.includes(name),
-    onToggle: () => toggleCard($, name),
-  }
-}
-
-/** The folded panel's one line: what is running, queued or ready. */
-async function foldedSummary($: EngineInterface): Promise<string> {
-  const [agents, next, queued] = await Promise.all([
-    read($, SUBAGENTS),
-    read($, NEXT_SESSION),
-    read($, QUEUED),
-  ])
-  const running = agents.filter(run => run.status === 'running').length
-  const parts = [
-    running > 0 ? `${running} subagent${running === 1 ? '' : 's'} running` : '',
-    queued.length > 0 ? `${queued.length} queued` : '',
-    next?.phase === 'ready' ? 'next session ready' : '',
-  ]
-
-  return parts.filter(part => part !== '').join('  ·  ')
-}
-
-/** The panel's top row: its name, which folds or unfolds it, and when folded, the summary. */
-function panelBar($: EngineInterface, t: ElementTable, isFolded: boolean, summary: string) {
-  const { Box, Text, Button } = t
-
-  return (
-    <Box key={PANEL_KEY} flexDirection="row" gap={2} alignItems="center">
-      <Button
-        key="clawd-watch-fold"
-        plain
-        dimColor
-        hotkey="h"
-        label={`${isFolded ? '▸' : '▾'} ${PANEL_NAME}`}
-        onPress={() => setFolded($, !isFolded)}
-      />
-      {summary !== '' && (
-        <Box flexShrink={1} minWidth={0}>
-          <Text dimColor wrap="truncate-end">
-            {summary}
-          </Text>
-        </Box>
-      )}
-    </Box>
-  )
-}
-
-/**
- * Places this mod's sections in the panel. The first mod to draw adds the panel's top row; folded,
- * that row is all there is, and the other mods add nothing.
- */
-async function inPanel(
-  $: EngineInterface,
-  t: ElementTable,
-  above: JSX.Element,
-  content: JSX.Element,
-) {
-  const { Box } = t
-  const isFirst = !hasKey(above, PANEL_KEY)
-  const gap = hasContent(above) ? SECTION_GAP : 0
-  const folded = await isFolded($)
-  if (folded && !isFirst) return above
-
-  return (
-    <Box flexDirection="column">
-      {above}
-      {isFirst && (
-        <Box flexDirection="column" marginTop={gap}>
-          {panelBar($, t, folded, folded ? await foldedSummary($) : '')}
-        </Box>
-      )}
-      {!folded && (
-        <Box flexDirection="column" marginTop={isFirst ? 1 : gap}>
-          {content}
-        </Box>
-      )}
-    </Box>
-  )
-}
-
-/** Whether the "Show in" setting (both, desktop or terminal) includes a surface. */
-export function runsOn(showIn: string, surface: RenderSurface): boolean {
-  if (showIn === 'desktop') return surface !== 'terminal'
-  if (showIn === 'terminal') return surface === 'terminal'
-
-  return true
-}
-
-/** Whether the mod runs in this session, judged by the surfaces drawing it right now. */
-async function isActive($: EngineInterface, showIn: string): Promise<boolean> {
-  if (showIn === 'both') return true
-  const surfaces = await $.session.surfaces()
-
-  // Until a client attaches (the desktop app, the SDK) nothing rules the mod out.
-  return surfaces.length === 0 || surfaces.some(surface => runsOn(showIn, surface))
-}
 
 function tag(text: string, name: string): string | undefined {
   const match = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)
@@ -627,93 +458,6 @@ async function copyHandoff($: EngineInterface, ready: ReadyHandoff, surface: Ren
   $.ui.toast(copied.isCopied ? 'Handoff copied.' : 'Could not reach the clipboard.')
 }
 
-/** A collapsible card's state and toggle, as the desktop app draws sections. */
-type Card = { key: string; isCollapsed: boolean; onToggle: () => unknown }
-
-/**
- * A band section. In the desktop app it is a card, as the app's own sidebar draws them: a title
- * whose chevron collapses it, `aside` at the right, the content below. In the terminal its name
- * sits in the shared left column (above the content when narrow), the content beside it and
- * `aside` at the far right.
- */
-function section(
-  t: ElementTable,
-  label: string,
-  content: JSX.Element,
-  layout: {
-    isStacked: boolean
-    aside?: JSX.Element
-    hasHint?: boolean
-    isCentred?: boolean
-    card?: Card
-  },
-) {
-  const { Box, Text, Button } = t
-  const { isStacked, aside, hasHint = false, isCentred = false, card } = layout
-  const hint = hasHint && (
-    <Box key={HINT_KEY}>
-      <Text dimColor italic>
-        {HINT_TEXT}
-      </Text>
-    </Box>
-  )
-
-  if (card) {
-    return (
-      <Box
-        flexDirection="column"
-        borderStyle="round"
-        borderColor={CARD_BORDER}
-        paddingX={CARD_PADDING.x}
-        paddingY={CARD_PADDING.y}
-      >
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
-          <Button
-            key={card.key}
-            plain
-            label={`${label}  ${card.isCollapsed ? '›' : '⌄'}`}
-            onPress={() => void card.onToggle()}
-          />
-          {aside}
-        </Box>
-        {!card.isCollapsed && (
-          <Box flexDirection="column" marginTop={1}>
-            {content}
-          </Box>
-        )}
-      </Box>
-    )
-  }
-
-  if (isStacked) {
-    return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
-          <Box flexDirection="row" gap={2} flexShrink={0}>
-            <Text dimColor>{label}</Text>
-            {hint}
-          </Box>
-          {aside}
-        </Box>
-        {content}
-      </Box>
-    )
-  }
-
-  return (
-    <Box flexDirection="row" gap={2} alignItems={isCentred && !hasHint ? 'center' : 'flex-start'}>
-      <Box flexDirection="column" flexShrink={0} width={LABEL_WIDTH}>
-        <Text dimColor>{label}</Text>
-        {hint}
-      </Box>
-      <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-        {content}
-      </Box>
-      {aside && <Box flexShrink={0}>{aside}</Box>}
-    </Box>
-  )
-}
-
 /** A progress bar: rounded SVG on graphical surfaces, a run of blocks in the terminal. */
 function meter(t: ElementTable, key: string, fraction: number, label: string, style: Style) {
   const { Box, Text } = t
@@ -792,14 +536,16 @@ function agentLine(t: ElementTable, run: AgentRun, at: number, style: Style) {
 }
 
 function agentRow(t: ElementTable, run: AgentRun, at: number, style: Style) {
-  if (!style.isText) return agentLine(t, run, at, style)
+  // One line where there's room; a narrow pane gets the two-line row the terminal draws.
+  if (!style.isText && !style.isCompact) return agentLine(t, run, at, style)
 
   const { Box, Text } = t
   const { elapsed, progress, remaining } = estimate(run, at)
   const look = STATUS_LOOK[run.status]
   const isRunning = run.status === 'running'
   // Braille spinners read as stray dots in a proportional font, so only the terminal spins.
-  const glyph = isRunning ? SPINNER[Math.floor(at / TICK_MS) % SPINNER.length] : look.glyph
+  const glyph =
+    isRunning && style.isText ? SPINNER[Math.floor(at / TICK_MS) % SPINNER.length] : look.glyph
 
   return (
     <Box flexDirection="column">
@@ -882,7 +628,6 @@ function handoffSection(
   t: ElementTable,
   ready: ReadyHandoff,
   style: Style,
-  hasHint: boolean,
   card?: Card,
 ) {
   const { Box, Text, Button } = t
@@ -893,10 +638,10 @@ function handoffSection(
     ready.source === 'auto' ? 'Suggested' : 'Next session',
     <Box
       key="handoff"
-      flexDirection="row"
+      flexDirection={style.isCompact ? 'column' : 'row'}
       justifyContent="space-between"
-      gap={2}
-      alignItems="center"
+      gap={style.isCompact ? 1 : 2}
+      alignItems={style.isCompact ? 'flex-start' : 'center'}
     >
       <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
         <Text bold wrap="truncate-end">
@@ -934,32 +679,12 @@ function handoffSection(
         />
       </Box>
     </Box>,
-    { ...style, hasHint, isCentred: true, card },
+    { ...style, isCentred: true, card },
   )
 }
 
-export const register: Register = (on, options) => {
-  const showIn = String(options.show_in ?? 'both')
-
-  on('session.start', async ($, e, next) => {
-    const result = await next(e)
-    await Promise.all([loadFolded($), loadCards($)]).catch(() => undefined)
-    const [, usage] = await Promise.all([
-      $.command
-        .register({
-          name: 'handoff',
-          description:
-            'Write a starter prompt for a fresh session; a pill above the prompt starts it',
-          argumentHint: '[focus] | auto on | auto off',
-        })
-        .catch(() => undefined),
-      $.session.usage().catch(() => undefined),
-    ])
-    local.contextPercent = usage?.context.percent ?? 0
-
-    return result
-  })
-
+/** The hooks behind the Subagents and Next session sections, and /handoff. */
+export function registerSubagents(on: On, showIn: string) {
   on('session.measure', ($, e, next) => {
     local.contextPercent = e.context.percent ?? local.contextPercent
     return next(e)
@@ -977,7 +702,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'handoff' }, async ($, e) => {
     if (!(await isActive($, showIn))) {
-      return { text: `session-hud is set to show in the ${showIn} only. Change it under /config.` }
+      return { text: `Clawd Watch is set to show in the ${showIn} only. Change it under /config.` }
     }
 
     const args = (e.args ?? '').trim()
@@ -993,7 +718,7 @@ export const register: Register = (on, options) => {
     $.clock.after(0, () => void writeHandoff($, args))
 
     return {
-      text: 'Writing a handoff. A pill to start the fresh session will appear above the prompt.',
+      text: 'Writing a handoff. Clawd Watch will offer to start the fresh session.',
     }
   })
 
@@ -1085,102 +810,118 @@ export const register: Register = (on, options) => {
 
     return ran
   })
+}
 
-  on('turn.complete', async ($, e, next) => {
-    const result = await next(e)
-    const agentId = e.agentId
+/** The Subagents and Next session sections, as many as have something to show. */
+export async function subagentSections(
+  $: EngineInterface,
+  t: ElementTable,
+  view: View,
+): Promise<JSX.Element[]> {
+  // `now` is read so the ticker's writes redraw while agents run.
+  const [list, pending, at] = await Promise.all([
+    read($, agents),
+    read($, handoff),
+    $.clock.now(),
+    read($, now),
+  ])
+  const shown = list.filter(run => isShown(run, at))
+  const { Text } = t
+  const cols = Math.max(MIN_BAND_COLUMNS, view.columns)
+  const style: Style = {
+    isText: view.isText,
+    isStacked: view.isStacked,
+    isCompact: view.columns < COMPACT_COLUMNS,
+    barCells: clamp(
+      Math.floor((cols - (view.isStacked ? 0 : LABEL_WIDTH)) / COLUMNS_PER_BAR_CELL),
+      BAR_MIN_CELLS,
+      BAR_MAX_CELLS,
+    ),
+  }
+  const card = (name: string) => cardFor($, view, name)
 
-    if (agentId !== undefined) {
-      await finish($, one => one.agentId === agentId, e.reason === 'answer' ? 'done' : 'failed')
-      return result
-    }
-
-    local.turnsSinceCheck += 1
-
-    const pending = await read($, handoff)
-    if (pending?.phase === 'ready' && pending.source === 'auto') {
-      const turnsSince = pending.turnsSince + 1
-      await update($, handoff, () =>
-        turnsSince >= STALE_TURNS ? null : { ...pending, turnsSince },
-      )
-    }
-
-    const isDue =
-      e.reason === 'answer' &&
-      !pending &&
-      local.turnsSinceCheck >= CHECK_AFTER_TURNS &&
-      (local.contextPercent >= CHECK_AT_CONTEXT_PERCENT ||
-        local.turnsSinceCheck >= CHECK_ALWAYS_AFTER_TURNS)
-    if (!isDue) return result
-
-    const [autoSuggest, list, active] = await Promise.all([
-      $.store.get(STORE_AUTO_SUGGEST),
-      read($, agents),
-      isActive($, showIn),
-    ])
-    if (autoSuggest !== false && active && !list.some(run => run.status === 'running')) {
-      local.turnsSinceCheck = 0
-      $.clock.after(CHECK_DELAY_MS, () => void autoCheck($))
-    }
-
-    return result
-  })
-
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Other mods' sections come first; this one follows, nearer the prompt.
-    const above = await next(e)
-    if (e.props.hasSurvey || !runsOn(showIn, e.surface)) return above
-
-    // `now` is read so the ticker's writes redraw the band while agents run.
-    const [list, pending, at] = await Promise.all([
-      read($, agents),
-      read($, handoff),
-      $.clock.now(),
-      read($, now),
-    ])
-    const shown = list.filter(run => isShown(run, at))
-    if (shown.length === 0 && !pending) return above
-
-    const t = $.ui.resolve(e)
-    const { Box, Text } = t
-    const cols = Math.max(MIN_BAND_COLUMNS, e.props.bodyColumns)
-    const style: Style = {
-      isText: e.surface === 'terminal',
-      isStacked: e.surface !== 'terminal' || cols < NARROW_COLUMNS,
-      barCells: clamp(
-        Math.floor((cols - LABEL_WIDTH) / COLUMNS_PER_BAR_CELL),
-        BAR_MIN_CELLS,
-        BAR_MAX_CELLS,
-      ),
-    }
-    // The terminal takes no clicks outside fullscreen: say how to reach the buttons.
-    const hasHint = style.isText && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
-
-    const collapsed = await read($, OWN_CARDS)
-    const card = (name: string) => cardFor($, style.isText, collapsed, name)
-    const sections: JSX.Element[] = []
-    if (shown.length > 0) {
-      sections.push(subagentsSection(t, shown, at, style, e.props.maxRows, card('Subagents')))
-    }
-    if (pending?.phase === 'writing') {
-      sections.push(
-        section(t, 'Next session', <Text dimColor>Writing the handoff prompt…</Text>, {
-          ...style,
-          card: card('Next session'),
-        }),
-      )
-    }
-    if (pending?.phase === 'ready') {
-      sections.push(handoffSection($, t, pending, style, hasHint, card('Next session')))
-    }
-
-    return inPanel(
-      $,
-      t,
-      above,
-      <Box flexDirection="column" gap={SECTION_GAP}>
-        {sections}
-      </Box>,
+  const sections: JSX.Element[] = []
+  if (shown.length > 0) {
+    sections.push(subagentsSection(t, shown, at, style, view.maxRows, card('Subagents')))
+  }
+  if (pending?.phase === 'writing') {
+    sections.push(
+      section(t, 'Next session', <Text dimColor>Writing the handoff prompt…</Text>, {
+        ...style,
+        card: card('Next session'),
+      }),
     )
-  })
+  }
+  if (pending?.phase === 'ready') {
+    sections.push(handoffSection($, t, pending, style, card('Next session')))
+  }
+
+  return sections
+}
+
+/** What the folded panel says about subagents and the next session. */
+export async function subagentSummary($: EngineInterface): Promise<string[]> {
+  const [list, pending] = await Promise.all([read($, agents), read($, handoff)])
+  const running = list.filter(run => run.status === 'running').length
+
+  return [
+    running > 0 ? `${plural(running, 'subagent')} running` : '',
+    pending?.phase === 'ready' ? 'next session ready' : '',
+  ].filter(part => part !== '')
+}
+
+/** At session start: /handoff, and how full the context is. */
+export async function startSubagents($: EngineInterface) {
+  const [, usage] = await Promise.all([
+    $.command
+      .register({
+        name: 'handoff',
+        description:
+          'Write a starter prompt for a fresh session; a pill above the prompt starts it',
+        argumentHint: '[focus] | auto on | auto off',
+      })
+      .catch(() => undefined),
+    $.session.usage().catch(() => undefined),
+  ])
+  local.contextPercent = usage?.context.percent ?? 0
+}
+
+/** When a turn ends: a subagent's ends its row; the main thread's may ask about a fresh session. */
+export async function subagentsTurnComplete(
+  $: EngineInterface,
+  e: TurnCompleteInput,
+  showIn: string,
+) {
+  const agentId = e.agentId
+
+  if (agentId !== undefined) {
+    await finish($, one => one.agentId === agentId, e.reason === 'answer' ? 'done' : 'failed')
+    return
+  }
+
+  local.turnsSinceCheck += 1
+
+  const pending = await read($, handoff)
+  if (pending?.phase === 'ready' && pending.source === 'auto') {
+    const turnsSince = pending.turnsSince + 1
+    await update($, handoff, () => (turnsSince >= STALE_TURNS ? null : { ...pending, turnsSince }))
+  }
+
+  const isDue =
+    e.reason === 'answer' &&
+    !pending &&
+    local.turnsSinceCheck >= CHECK_AFTER_TURNS &&
+    (local.contextPercent >= CHECK_AT_CONTEXT_PERCENT ||
+      local.turnsSinceCheck >= CHECK_ALWAYS_AFTER_TURNS)
+  if (!isDue) return
+
+  const [autoSuggest, list, active] = await Promise.all([
+    $.store.get(STORE_AUTO_SUGGEST),
+    read($, agents),
+    isActive($, showIn),
+  ])
+  if (autoSuggest !== false && active && !list.some(run => run.status === 'running')) {
+    local.turnsSinceCheck = 0
+    $.clock.after(CHECK_DELAY_MS, () => void autoCheck($))
+  }
 }

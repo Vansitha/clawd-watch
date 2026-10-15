@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { runsOn } from '../hooks/register'
+import { runsOn } from '../hooks/shared'
 
 const props = {
   hasSurvey: false,
@@ -12,7 +12,7 @@ const props = {
   view: {},
 }
 
-function engine(on: On, below: 'empty' | 'hint' = 'empty') {
+function engine(on: On) {
   const sent: string[] = []
   mock.clock(on, { now: 1_000_000 })
   on('prompt.submit', ($, e) => (sent.push(e.text), { text: e.text }))
@@ -20,15 +20,8 @@ function engine(on: On, below: 'empty' | 'hint' = 'empty') {
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    // Another Clawd Watch mod that already drew the hint.
-    return below === 'hint' ? (
-      <Box key="clawd-watch-hint">
-        <Text>ctrl+x tab</Text>
-      </Box>
-    ) : (
-      <Box key="engine" />
-    )
+    const { Box } = $.ui.resolve(e)
+    return <Box key="engine" />
   })
 
   return sent
@@ -62,13 +55,13 @@ test(
   },
 )
 
-test('the terminal shows "ctrl+x tab" once, and only without fullscreen', async ($, on) => {
+test('the terminal shows "ctrl+x tab" only without fullscreen', async ($, on) => {
   engine(on)
   await $.turn.start({ text: 'build it', turnId: 't1' })
   await $.prompt.submit({ text: 'later', wait: true, turnId: 't1', origin: { kind: 'composer' } })
 
   const plainTerminal = await $.ui.mount({
-    plugin: 'message-queue',
+    plugin: 'clawd-watch',
     surface: 'terminal',
     component: 'AbovePrompt',
     props,
@@ -78,7 +71,7 @@ test('the terminal shows "ctrl+x tab" once, and only without fullscreen', async 
   await plainTerminal.unmount()
 
   const fullscreen = await $.ui.mount({
-    plugin: 'message-queue',
+    plugin: 'clawd-watch',
     surface: 'terminal',
     component: 'AbovePrompt',
     props,
@@ -88,29 +81,13 @@ test('the terminal shows "ctrl+x tab" once, and only without fullscreen', async 
   await fullscreen.unmount()
 
   const desktop = await $.ui.mount({
-    plugin: 'message-queue',
+    plugin: 'clawd-watch',
     surface: 'desktop',
     component: 'AbovePrompt',
     props,
   })
   expect(await desktop.find({ type: 'Text', text: 'ctrl+x tab' })).toBeUndefined()
   await desktop.unmount()
-})
-
-test("another mod's hint means no second one", async ($, on) => {
-  engine(on, 'hint')
-  await $.turn.start({ text: 'build it', turnId: 't1' })
-  await $.prompt.submit({ text: 'later', wait: true, turnId: 't1', origin: { kind: 'composer' } })
-
-  const ui = await $.ui.mount({
-    plugin: 'message-queue',
-    surface: 'terminal',
-    component: 'AbovePrompt',
-    props,
-    viewport: { columns: 120, rows: 40, isFullscreen: false },
-  })
-  expect((await ui.findAll({ type: 'Text', text: 'ctrl+x tab' })).length).toBe(1)
-  await ui.unmount()
 })
 
 test(

@@ -1,0 +1,24 @@
+{
+  "name": "clawd-watch",
+  "version": "0.2.0",
+  "description": "A Claude Code panel that shows when your subagents will finish, queues messages for after Claude is done, offers a one-click fresh session, and keeps your favourite skills one click away.",
+  "author": {
+    "name": "Vansitha"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/Vansitha/clawd-watch",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "show_in": {
+      "type": "string",
+      "title": "Show in",
+      "description": "Where Clawd Watch runs: the desktop app, the terminal, or both. Skill use is counted everywhere.",
+      "default": "both",
+      "options": [
+        "both",
+        "desktop",
+        "terminal"
+      ]
+    }
+  }
+}
