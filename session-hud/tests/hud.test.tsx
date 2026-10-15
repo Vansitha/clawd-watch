@@ -115,7 +115,12 @@ test('a running subagent shows its task, then finishes', async ($, on) => {
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const view = await $.ui.mount({ ...band(), surface })
-    expect(await view.find({ type: 'Text', text: 'Subagents' })).toBeDefined()
+    // The desktop app draws the section as a card whose title collapses it.
+    const title =
+      surface === 'terminal'
+        ? await view.find({ type: 'Text', text: 'Subagents' })
+        : await view.find({ key: 'card-subagents' })
+    expect(title).toBeDefined()
     expect(await view.find({ type: 'Text', text: /^All done by ~/ })).toBeDefined()
     // The terminal says when each row will be done; the desktop lines the times up in a column.
     const rowTime = surface === 'terminal' ? /^done by ~/ : /^~\d/
@@ -200,7 +205,7 @@ test(
     await terminal.unmount()
 
     const desktop = await $.ui.mount({ ...band(), surface: 'desktop' })
-    expect(await desktop.find({ type: 'Text', text: 'Subagents' })).toBeDefined()
+    expect(await desktop.find({ key: 'card-subagents' })).toBeDefined()
     await desktop.unmount()
   },
 )
@@ -262,7 +267,7 @@ test('a spawn that fails leaves no row behind', async ($, on) => {
     .catch(() => undefined)
 
   const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: 'Subagents' })).toBeUndefined()
+  expect(await ui.find({ key: 'card-subagents' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -363,6 +368,6 @@ test('folded, the panel still says how many subagents are running', async ($, on
   const ui = await $.ui.mount({ ...band(), surface: 'desktop' })
   await ui.press({ key: 'clawd-watch-fold' })
   expect(await ui.find({ type: 'Text', text: '1 subagent running' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Subagents' })).toBeUndefined()
+  expect(await ui.find({ key: 'card-subagents' })).toBeUndefined()
   await ui.unmount()
 })

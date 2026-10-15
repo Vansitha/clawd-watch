@@ -10,6 +10,8 @@ declare module 'claude-code' {
       /** True after the person stopped a turn: nothing is sent until they say so. */
       isPaused: boolean
       panel: Panel | null
+      /** The names of the desktop app's cards left collapsed. */
+      collapsedCards: string[]
     }
     'session-hud': {
       agents: Array<{ status: 'running' | 'done' | 'failed' }>

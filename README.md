@@ -16,6 +16,8 @@ Clawd Watch keeps an eye on Claude Code while it works. Three small mods: see wh
 
 Each mod adds a section to the panel above the prompt. The sections share one layout, so together they read as a single panel.
 
+In the desktop app each section is a card, like the app's own sidebar: click a card's title to collapse it to one line, and again to open it. Cards stay the way you left them.
+
 **Minimise it** when it's in the way: click **▾ Clawd Watch** at the top of the panel (in the terminal, press `h` after `ctrl+x tab`). It shrinks to one line that still says what's going on, such as *2 subagents running · 1 queued*. Click it again to bring the panel back. It stays the way you left it in new sessions.
 
 ## Install
@@ -126,7 +128,14 @@ Your pinned skills and your most-used ones, one click away.
   - **Available here:** every skill you can use in this project, A to Z
 
   Click ☆ to pin a skill, or click a name to use it. Where the app can't show a side pane, the lists open inside the panel instead.
-- `/dock pin <skill>` and `/dock unpin <skill>` pin from the prompt.
+- **Search and filter** at the top of the pane. Each skill is tagged by where it comes from, and the filters show each kind with a count:
+  - **Built-in:** comes with Claude Code
+  - **Mine:** skills you wrote, in `~/.claude/skills` or the project's `.claude/skills`
+  - **Installed:** from a plugin, an MCP server, or `npx skills add`; the tag says which one (for example `pbakaus/impeccable`)
+- **Remove or hide a skill** from its row (hover it in the desktop app):
+  - **Remove** takes one of your own skills out of Claude Code, after you confirm. Nothing is deleted: it moves to `~/.claude/clawd-watch/removed-skills`, and moving it back restores it. Run `/reload-skills` to drop it from the `/` menu straight away.
+  - **Hide** is for skills that come with Claude Code or a plugin, which can't be removed one at a time. They leave the dock and the lists but still work if you type them. The **Hidden** filter lists them, with **Unhide**.
+- `/dock pin <skill>`, `/dock unpin <skill>`, `/dock hide <skill>` and `/dock unhide <skill>` do the same from the prompt.
 - In the `/` menu, pinned skills say `★ pinned` and used ones say how often you used them in the last 30 days.
 
 Built-in skills such as `simplify` look like ordinary commands until you use them once. After that they show up in the lists.

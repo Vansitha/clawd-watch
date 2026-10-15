@@ -11,6 +11,11 @@ const LABEL_WIDTH = 17
 const NARROW_COLUMNS = 72
 const HINT_KEY = 'clawd-watch-hint'
 const HINT_TEXT = 'ctrl+x tab'
+/** The desktop app's cards: the prompt box's own border colour, and their inner spacing. */
+const CARD_BORDER = 'promptBorder'
+const CARD_PADDING = { x: 2, y: 1 }
+/** Rows between sections, and between cards. */
+const SECTION_GAP = 1
 const PANEL_KEY = 'clawd-watch-panel'
 const PANEL_NAME = 'Clawd Watch'
 const STORE_PANEL = 'panel'
@@ -24,6 +29,8 @@ const NEXT_SESSION = atom({ plugin: 'session-hud', key: 'handoff' } as const, nu
 const QUEUED = atom({ plugin: 'message-queue', key: 'messages' } as const, [])
 /** This mod's own copy, the one it writes. */
 const OWN_PANEL = atom({ plugin: 'message-queue', key: 'panel' } as const, null)
+const OWN_CARDS = atom({ plugin: 'message-queue', key: 'collapsedCards' } as const, [])
+const STORE_CARDS = 'collapsedCards'
 
 const ACCENT = '#d97757'
 /** Columns for a message's number, and for its ↑ ✕ controls. */
@@ -56,11 +63,6 @@ function hasContent(tree: unknown): boolean {
   return ((tree as { children?: unknown[] }).children?.length ?? 0) > 0
 }
 
-/** Rows between sections: one in the terminal, two in the desktop app, so each reads apart. */
-function sectionGap(surface: RenderSurface): number {
-  return surface === 'terminal' ? 1 : 2
-}
-
 /** Whether the panel is folded: the most recent choice made in any Clawd Watch mod. */
 async function isFolded($: EngineInterface): Promise<boolean> {
   const choices = await Promise.all([read($, HUD_PANEL), read($, QUEUE_PANEL), read($, DOCK_PANEL)])
@@ -82,6 +84,37 @@ async function loadFolded($: EngineInterface) {
   const stored = (await $.store.get(STORE_PANEL)) as Panel | undefined
   if (typeof stored?.isFolded === 'boolean' && typeof stored.at === 'number') {
     await update($, OWN_PANEL, () => stored)
+  }
+}
+
+/** Collapses a card, or opens it again, and keeps that for later sessions. */
+async function toggleCard($: EngineInterface, name: string) {
+  const list = await update($, OWN_CARDS, all =>
+    all.includes(name) ? all.filter(one => one !== name) : [...all, name],
+  )
+  await $.store.set(STORE_CARDS, list)
+}
+
+async function loadCards($: EngineInterface) {
+  const stored = await $.store.get(STORE_CARDS)
+  if (Array.isArray(stored)) {
+    await update($, OWN_CARDS, () => stored.filter((one): one is string => typeof one === 'string'))
+  }
+}
+
+/** A section's card in the desktop app, collapsed as it was left; the terminal draws no cards. */
+function cardFor(
+  $: EngineInterface,
+  isText: boolean,
+  collapsed: readonly string[],
+  name: string,
+): Card | undefined {
+  if (isText) return undefined
+
+  return {
+    key: `card-${name.toLowerCase().replace(/\W+/g, '-')}`,
+    isCollapsed: collapsed.includes(name),
+    onToggle: () => toggleCard($, name),
   }
 }
 
@@ -134,13 +167,12 @@ function panelBar($: EngineInterface, t: ElementTable, isFolded: boolean, summar
 async function inPanel(
   $: EngineInterface,
   t: ElementTable,
-  surface: RenderSurface,
   above: JSX.Element,
   content: JSX.Element,
 ) {
   const { Box } = t
   const isFirst = !hasKey(above, PANEL_KEY)
-  const gap = hasContent(above) ? sectionGap(surface) : 0
+  const gap = hasContent(above) ? SECTION_GAP : 0
   const folded = await isFolded($)
   if (folded && !isFirst) return above
 
@@ -232,19 +264,29 @@ async function moveUp($: EngineInterface, id: string) {
   })
 }
 
+/** A collapsible card's state and toggle, as the desktop app draws sections. */
+type Card = { key: string; isCollapsed: boolean; onToggle: () => unknown }
+
 /**
- * A band section. Stacked (the desktop app, a narrow terminal), its name heads it with `aside` at
- * the right, and the content spans the width below. Otherwise its name sits in the shared left
- * column, the content beside it and `aside` at the far right.
+ * A band section. In the desktop app it is a card, as the app's own sidebar draws them: a title
+ * whose chevron collapses it, `aside` at the right, the content below. In the terminal its name
+ * sits in the shared left column (above the content when narrow), the content beside it and
+ * `aside` at the far right.
  */
 function section(
   t: ElementTable,
   label: string,
   content: JSX.Element,
-  layout: { isStacked: boolean; aside?: JSX.Element; hasHint?: boolean; isCentred?: boolean },
+  layout: {
+    isStacked: boolean
+    aside?: JSX.Element
+    hasHint?: boolean
+    isCentred?: boolean
+    card?: Card
+  },
 ) {
-  const { Box, Text } = t
-  const { isStacked, aside, hasHint = false, isCentred = false } = layout
+  const { Box, Text, Button } = t
+  const { isStacked, aside, hasHint = false, isCentred = false, card } = layout
   const hint = hasHint && (
     <Box key={HINT_KEY}>
       <Text dimColor italic>
@@ -252,6 +294,33 @@ function section(
       </Text>
     </Box>
   )
+
+  if (card) {
+    return (
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={CARD_BORDER}
+        paddingX={CARD_PADDING.x}
+        paddingY={CARD_PADDING.y}
+      >
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
+          <Button
+            key={card.key}
+            plain
+            label={`${label}  ${card.isCollapsed ? '›' : '⌄'}`}
+            onPress={() => void card.onToggle()}
+          />
+          {aside}
+        </Box>
+        {!card.isCollapsed && (
+          <Box flexDirection="column" marginTop={1}>
+            {content}
+          </Box>
+        )}
+      </Box>
+    )
+  }
 
   if (isStacked) {
     return (
@@ -330,7 +399,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    await loadFolded($).catch(() => undefined)
+    await Promise.all([loadFolded($), loadCards($)]).catch(() => undefined)
     await $.command
       .register({
         name: 'queue',
@@ -434,7 +503,11 @@ export const register: Register = (on, options) => {
     const above = await next(e)
     if (e.props.hasSurvey || !runsOn(showIn, e.surface)) return above
 
-    const [list, paused] = await Promise.all([read($, messages), read($, isPaused)])
+    const [list, paused, collapsed] = await Promise.all([
+      read($, messages),
+      read($, isPaused),
+      read($, OWN_CARDS),
+    ])
     if (list.length === 0) return above
 
     const t = $.ui.resolve(e)
@@ -462,7 +535,6 @@ export const register: Register = (on, options) => {
     return inPanel(
       $,
       t,
-      e.surface,
       above,
       section(
         t,
@@ -472,7 +544,12 @@ export const register: Register = (on, options) => {
           {list.map((m, index) => messageRow($, t, m, index, isText))}
           {!isStacked && <Box paddingLeft={INDEX_WIDTH + 1}>{status}</Box>}
         </Box>,
-        { isStacked, hasHint, ...(isStacked ? { aside: status } : {}) },
+        {
+          isStacked,
+          hasHint,
+          card: cardFor($, isText, collapsed, 'Queued'),
+          ...(isStacked ? { aside: status } : {}),
+        },
       ),
     )
   })

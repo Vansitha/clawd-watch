@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { CommandInfo, On } from 'claude-code'
-import { fitChips, frequent, groupOf } from '../hooks/register'
+import { fitChips, frequent, kindOf, SAFE_NAME } from '../hooks/register'
 
 const DAY = 86_400_000
 const NOW = 1_800_000_000_000
@@ -75,7 +75,12 @@ test('pinned and frequently used skills sit in the dock, and a click fills the p
 
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ ...band, surface })
-    expect(await ui.find({ type: 'Text', text: 'Favourite skills' })).toBeDefined()
+    // The desktop app draws the section as a card whose title collapses it.
+    const title =
+      surface === 'terminal'
+        ? await ui.find({ type: 'Text', text: 'Favourite skills' })
+        : await ui.find({ key: 'card-favourite-skills' })
+    expect(title).toBeDefined()
     expect((await ui.find({ key: 'dock-pin-anthropic-skills:pdf' }))?.props.label).toBe('★ pdf')
     expect((await ui.find({ key: 'dock-freq-simplify' }))?.props.label).toBe('simplify')
     expect(await ui.find({ key: 'dock-freq-clear' })).toBeUndefined()
@@ -109,7 +114,7 @@ test('using a skill counts it, and pinning from the pane moves it to the front',
       view: {},
     },
   })
-  expect(await pane.find({ type: 'Text', text: 'AVAILABLE HERE' })).toBeDefined()
+  expect(await pane.find({ key: 'card-available-here' })).toBeDefined()
   expect(await pane.find({ key: 'used-use-release-checklist' })).toBeDefined()
   expect(await pane.find({ key: 'all-use-anthropic-skills:pdf' })).toBeDefined()
   await pane.press({ key: 'all-star-release-checklist' })
@@ -147,16 +152,20 @@ test('/ menu descriptions carry the pin and the count', async ($, on) => {
 })
 
 test('built-in commands only count as skills once they have been used as one', () => {
-  expect(groupOf(COMMANDS[0]!, [])).toBeUndefined()
-  expect(groupOf(COMMANDS[1]!, ['simplify'])).toBe('Built-in')
-  expect(groupOf(COMMANDS[3]!, [])).toBe('Plugins · anthropic-skills')
-  expect(groupOf(COMMANDS[5]!, [])).toBeUndefined()
+  expect(kindOf(COMMANDS[0]!, [])).toBeUndefined()
+  expect(kindOf(COMMANDS[1]!, ['simplify'])).toEqual({ kind: 'builtin' })
+  expect(kindOf(COMMANDS[2]!, [])).toEqual({ kind: 'mine' })
+  expect(kindOf(COMMANDS[3]!, [])).toEqual({ kind: 'installed', origin: 'anthropic-skills' })
+  expect(kindOf(COMMANDS[5]!, [])).toBeUndefined()
+  expect(
+    kindOf({ name: 'handoff', description: '', source: 'plugin', plugin: 'session-hud' }, []),
+  ).toBeUndefined()
 
   const list = [
-    { name: 'a', description: '', group: 'x' },
-    { name: 'b', description: '', group: 'x' },
-    { name: 'c', description: '', group: 'x' },
-    { name: 'd', description: '', group: 'x' },
+    { name: 'a', description: '', kind: 'mine' as const },
+    { name: 'b', description: '', kind: 'mine' as const },
+    { name: 'c', description: '', kind: 'mine' as const },
+    { name: 'd', description: '', kind: 'mine' as const },
   ]
   const ranked = frequent(
     list,
@@ -234,4 +243,108 @@ test('the desktop shows every pin, with All skills beside the name', async ($, o
   for (const name of many) expect(await ui.find({ key: `dock-pin-${name}` })).toBeDefined()
   expect((await ui.find({ key: 'dock-all' }))?.props.label).toBe('All skills (4) ›')
   await ui.unmount()
+})
+
+const pane = {
+  plugin: 'skill-dock',
+  component: 'Pane' as const,
+  requestId: 'skill-dock',
+  props: {
+    title: 'Skills',
+    isFocused: true,
+    bodyColumns: 60,
+    placement: 'dock' as const,
+    scroll: { offset: 0, bodyRows: 60 },
+    view: {},
+  },
+}
+
+/** A home folder holding /release-checklist, installed from acme/skills, and a shell that moves files. */
+function disk(on: On, moved: string[][]) {
+  const folder = '/home/me/.claude/skills/release-checklist'
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('fs.exists', ($, e) => ({ value: e.path === `${folder}/SKILL.md` }))
+  on('fs.read', ($, e) => {
+    if (e.path !== '/home/me/.agents/.skill-lock.json') throw new Error('missing')
+    return { value: JSON.stringify({ skills: { 'release-checklist': { source: 'acme/skills' } } }) }
+  })
+  on('fs.write', () => ({ value: undefined }))
+  on('process.run', ($, e) => {
+    moved.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  on('ui.toast', () => ({ value: undefined }))
+}
+
+test('the pane tags each skill by where it comes from, and filters and searches them', async ($, on) => {
+  engine(on, { knownSkills: ['simplify'] })
+  disk(on, [])
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...pane, surface: 'desktop' })
+
+  expect(await ui.find({ key: 'skills-filter-all' })).toBeDefined()
+  expect((await ui.find({ key: 'skills-filter-installed' }))?.props.label).toBe('Installed 3')
+  expect(await ui.find({ type: 'Text', text: 'acme/skills' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Built-in' })).toBeDefined()
+
+  await ui.press({ key: 'skills-filter-builtin' })
+  expect(await ui.find({ key: 'all-row-simplify' })).toBeDefined()
+  expect(await ui.find({ key: 'all-row-anthropic-skills:pdf' })).toBeUndefined()
+
+  await ui.press({ key: 'skills-filter-all' })
+  await ui.input({ key: 'skills-search', text: 'spread', kind: 'change' })
+  expect(await ui.find({ key: 'all-row-anthropic-skills:xlsx' })).toBeDefined()
+  expect(await ui.find({ key: 'all-row-simplify' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a plugin skill can be hidden and brought back', async ($, on) => {
+  engine(on, { pins: ['anthropic-skills:pdf'] })
+  disk(on, [])
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...pane, surface: 'desktop' })
+
+  expect((await ui.find({ key: 'all-act-anthropic-skills:pdf' }))?.props.label).toBe('Hide')
+  await ui.press({ key: 'all-act-anthropic-skills:pdf' })
+  expect(await ui.find({ key: 'all-row-anthropic-skills:pdf' })).toBeUndefined()
+  // Hiding a pin unpins it, so it leaves the dock too.
+  expect(await ui.find({ key: 'pinned-row-anthropic-skills:pdf' })).toBeUndefined()
+
+  await ui.press({ key: 'skills-filter-hidden' })
+  await ui.press({ key: 'hidden-act-anthropic-skills:pdf' })
+  await ui.press({ key: 'skills-filter-all' })
+  expect(await ui.find({ key: 'all-row-anthropic-skills:pdf' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('one of your skills is removed only after a confirm, into a folder it can be restored from', async ($, on) => {
+  const moved: string[][] = []
+  engine(on)
+  disk(on, moved)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...pane, surface: 'desktop' })
+
+  expect((await ui.find({ key: 'all-act-release-checklist' }))?.props.label).toBe('Remove')
+  await ui.press({ key: 'all-act-release-checklist' })
+  expect(moved).toEqual([])
+  await ui.press({ key: 'all-cancel-release-checklist' })
+  expect(await ui.find({ key: 'all-remove-release-checklist' })).toBeUndefined()
+
+  await ui.press({ key: 'all-act-release-checklist' })
+  await ui.press({ key: 'all-remove-release-checklist' })
+  expect(moved).toHaveLength(1)
+  const [command, from, to] = moved[0]!
+  expect([command, from]).toEqual(['mv', '/home/me/.claude/skills/release-checklist'])
+  expect(to).toMatch(/^\/home\/me\/\.claude\/clawd-watch\/removed-skills\/release-checklist-\d{4}-/)
+  expect(await ui.find({ key: 'all-row-release-checklist' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('only plain skill names are ever looked up on disk', () => {
+  for (const name of ['release-checklist', 'team:deploy', 'v1.2-notes']) {
+    expect(SAFE_NAME.test(name)).toBe(true)
+  }
+  for (const name of ['..', '.hidden', 'a/b', 'team:..', '../etc', '']) {
+    expect(SAFE_NAME.test(name)).toBe(false)
+  }
 })

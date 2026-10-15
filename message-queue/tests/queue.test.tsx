@@ -248,3 +248,23 @@ test('a panel folded in an earlier session starts folded', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: 'first' })).toBeUndefined()
   await ui.unmount()
 })
+
+test('in the desktop app the queue is a card that collapses to its title', async ($, on) => {
+  engine(on)
+  mock.store(on)
+  await $.turn.start({ text: 'build it', turnId: 't1' })
+  await $.prompt.submit(typed('first', true))
+
+  const ui = await $.ui.mount({ ...band, surface: 'desktop' })
+  expect((await ui.find({ key: 'card-queued' }))?.props.label).toBe('Queued (1)  ⌄')
+  await ui.press({ key: 'card-queued' })
+  expect((await ui.find({ key: 'card-queued' }))?.props.label).toBe('Queued (1)  ›')
+  expect(await ui.find({ type: 'Text', text: 'first' })).toBeUndefined()
+  await ui.unmount()
+
+  // The terminal draws no cards.
+  const terminal = await $.ui.mount({ ...band, surface: 'terminal' })
+  expect(await terminal.find({ key: 'card-queued' })).toBeUndefined()
+  expect(await terminal.find({ type: 'Text', text: 'first' })).toBeDefined()
+  await terminal.unmount()
+})

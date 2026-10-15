@@ -7,7 +7,7 @@ import type {
   RenderSurface,
 } from 'claude-code'
 
-import type { SkillEntry, Uses, Panel } from '../types'
+import type { PaneFilter, Panel, SkillEntry, SkillKind, Uses } from '../types'
 
 type Chip = { name: string; label: string; isPinned: boolean }
 
@@ -15,12 +15,21 @@ const pins = atom({ plugin: 'skill-dock', key: 'pins' } as const, [])
 const uses = atom({ plugin: 'skill-dock', key: 'uses' } as const, {})
 const skills = atom({ plugin: 'skill-dock', key: 'skills' } as const, [])
 const isInline = atom({ plugin: 'skill-dock', key: 'isInline' } as const, false)
+const hidden = atom({ plugin: 'skill-dock', key: 'hidden' } as const, [])
+const filter = atom({ plugin: 'skill-dock', key: 'filter' } as const, 'all')
+const query = atom({ plugin: 'skill-dock', key: 'query' } as const, '')
+const confirming = atom({ plugin: 'skill-dock', key: 'confirming' } as const, null)
 
 // Shared by every Clawd Watch mod; keep these identical across them.
 const LABEL_WIDTH = 17
 const NARROW_COLUMNS = 72
 const HINT_KEY = 'clawd-watch-hint'
 const HINT_TEXT = 'ctrl+x tab'
+/** The desktop app's cards: the prompt box's own border colour, and their inner spacing. */
+const CARD_BORDER = 'promptBorder'
+const CARD_PADDING = { x: 2, y: 1 }
+/** Rows between sections, and between cards. */
+const SECTION_GAP = 1
 const PANEL_KEY = 'clawd-watch-panel'
 const PANEL_NAME = 'Clawd Watch'
 const STORE_PANEL = 'panel'
@@ -34,12 +43,38 @@ const NEXT_SESSION = atom({ plugin: 'session-hud', key: 'handoff' } as const, nu
 const QUEUED = atom({ plugin: 'message-queue', key: 'messages' } as const, [])
 /** This mod's own copy, the one it writes. */
 const OWN_PANEL = atom({ plugin: 'skill-dock', key: 'panel' } as const, null)
+const OWN_CARDS = atom({ plugin: 'skill-dock', key: 'collapsedCards' } as const, [])
+const STORE_CARDS = 'collapsedCards'
 
 const PANE = 'skill-dock'
 const DOCK_LABEL = 'Favourite skills'
 const STORE_PINS = 'pins'
 const STORE_USES = 'uses'
 const STORE_KNOWN = 'knownSkills'
+const STORE_HIDDEN = 'hidden'
+
+/** Where a removed skill goes, under the home folder, so it can be moved back. */
+const REMOVED_DIR = '.claude/clawd-watch/removed-skills'
+const REMOVED_NOTE = `Skills removed from Claude Code by Clawd Watch's skill dock.
+To restore one, move it back and drop the date from its name:
+a folder into ~/.claude/skills (or the project's .claude/skills),
+a .md file into ~/.claude/commands. Then run /reload-skills.
+`
+/** What \`npx skills add\` records: installed everywhere, and in this project. */
+const SKILL_LOCKS = { home: '.agents/.skill-lock.json', project: 'skills-lock.json' }
+/**
+ * A skill or command name, with \`:\` between folders, no part starting with a dot (so never \`..\`);
+ * anything else is never looked up on disk, let alone moved.
+ */
+export const SAFE_NAME = /^[\w-][\w.-]*(:[\w-][\w.-]*)*$/
+const KIND_LABEL: Record<SkillKind, string> = {
+  builtin: 'Built-in',
+  mine: 'Mine',
+  installed: 'Installed',
+}
+/** Clawd Watch's own commands (/dock, /handoff, /queue) aren't skills. */
+const CLAWD_WATCH_MODS = ['session-hud', 'message-queue', 'skill-dock']
+const FILTERS: readonly PaneFilter[] = ['all', 'builtin', 'mine', 'installed', 'hidden']
 
 const DAY = 86_400_000
 /** A use counts half as much each week it ages. */
@@ -51,6 +86,7 @@ const KEEP = 60 * DAY
 const MAX_USES = 60
 const DOCK_FREQUENT = 5
 const PANE_FREQUENT = 10
+const LONG_TOAST_MS = 8000
 
 /** Cells a chip takes beyond its label (a terminal text chip, a drawn button). */
 const CHIP_PADDING_TEXT = 2
@@ -67,9 +103,13 @@ const local: {
   pins: string[]
   uses: Uses
   known: string[]
+  hidden: string[]
+  /** Skills removed this session; the engine lists them until its skills reload. */
+  removed: string[]
   monthCounts: Record<string, number>
+  cwd?: string
   loaded?: Promise<void>
-} = { pins: [], uses: {}, known: [], monthCounts: {} }
+} = { pins: [], uses: {}, known: [], hidden: [], removed: [], monthCounts: {} }
 
 /** Whether a drawn tree already holds an element with this key. */
 function hasKey(node: unknown, key: string): boolean {
@@ -82,11 +122,6 @@ function hasKey(node: unknown, key: string): boolean {
 /** Whether another mod drew anything above this one. */
 function hasContent(tree: unknown): boolean {
   return ((tree as { children?: unknown[] }).children?.length ?? 0) > 0
-}
-
-/** Rows between sections: one in the terminal, two in the desktop app, so each reads apart. */
-function sectionGap(surface: RenderSurface): number {
-  return surface === 'terminal' ? 1 : 2
 }
 
 /** Whether the panel is folded: the most recent choice made in any Clawd Watch mod. */
@@ -110,6 +145,37 @@ async function loadFolded($: EngineInterface) {
   const stored = (await $.store.get(STORE_PANEL)) as Panel | undefined
   if (typeof stored?.isFolded === 'boolean' && typeof stored.at === 'number') {
     await update($, OWN_PANEL, () => stored)
+  }
+}
+
+/** Collapses a card, or opens it again, and keeps that for later sessions. */
+async function toggleCard($: EngineInterface, name: string) {
+  const list = await update($, OWN_CARDS, all =>
+    all.includes(name) ? all.filter(one => one !== name) : [...all, name],
+  )
+  await $.store.set(STORE_CARDS, list)
+}
+
+async function loadCards($: EngineInterface) {
+  const stored = await $.store.get(STORE_CARDS)
+  if (Array.isArray(stored)) {
+    await update($, OWN_CARDS, () => stored.filter((one): one is string => typeof one === 'string'))
+  }
+}
+
+/** A section's card in the desktop app, collapsed as it was left; the terminal draws no cards. */
+function cardFor(
+  $: EngineInterface,
+  isText: boolean,
+  collapsed: readonly string[],
+  name: string,
+): Card | undefined {
+  if (isText) return undefined
+
+  return {
+    key: `card-${name.toLowerCase().replace(/\W+/g, '-')}`,
+    isCollapsed: collapsed.includes(name),
+    onToggle: () => toggleCard($, name),
   }
 }
 
@@ -162,13 +228,12 @@ function panelBar($: EngineInterface, t: ElementTable, isFolded: boolean, summar
 async function inPanel(
   $: EngineInterface,
   t: ElementTable,
-  surface: RenderSurface,
   above: JSX.Element,
   content: JSX.Element,
 ) {
   const { Box } = t
   const isFirst = !hasKey(above, PANEL_KEY)
-  const gap = hasContent(above) ? sectionGap(surface) : 0
+  const gap = hasContent(above) ? SECTION_GAP : 0
   const folded = await isFolded($)
   if (folded && !isFirst) return above
 
@@ -248,14 +313,37 @@ export function fitChips(chips: readonly Chip[], room: number, padding: number):
   return fitted
 }
 
-/** Which group of the list a command belongs to, or undefined when it is not a skill. */
-export function groupOf(info: CommandInfo, known: readonly string[]): string | undefined {
-  if (info.plugin === 'skill-dock') return undefined
-  if (info.source === 'user') return 'Yours & this project'
-  if (info.source === 'plugin') return `Plugins · ${info.plugin ?? 'other'}`
+/** What kind of skill a command is, or undefined when it is not a skill. */
+export function kindOf(
+  info: CommandInfo,
+  known: readonly string[],
+): { kind: SkillKind; origin?: string } | undefined {
+  if (info.plugin !== undefined && CLAWD_WATCH_MODS.includes(info.plugin)) return undefined
+  if (info.source === 'user') return { kind: 'mine' }
+  if (info.source === 'plugin') return { kind: 'installed', origin: info.plugin ?? 'a plugin' }
   if (!known.includes(info.name)) return undefined
 
-  return info.source === 'mcp' ? 'MCP' : 'Built-in'
+  return info.source === 'mcp' ? { kind: 'installed', origin: 'MCP' } : { kind: 'builtin' }
+}
+
+/** The short tag a skill carries in the lists: Built-in, Mine, or where it was installed from. */
+export function tagOf(s: SkillEntry): string {
+  return s.kind === 'installed' ? (s.origin ?? KIND_LABEL.installed) : KIND_LABEL[s.kind]
+}
+
+/** Whether a skill shows under a filter and a search. */
+export function matches(
+  s: SkillEntry,
+  view: { filter: PaneFilter; query: string; hidden: readonly string[] },
+): boolean {
+  const isHidden = view.hidden.includes(s.name)
+  if (view.filter === 'hidden' ? !isHidden : isHidden) return false
+  if (view.filter !== 'all' && view.filter !== 'hidden' && s.kind !== view.filter) return false
+  const words = view.query.trim().toLowerCase()
+
+  return (
+    words === '' || [s.name, s.description, s.origin ?? ''].join(' ').toLowerCase().includes(words)
+  )
 }
 
 /** The name without a plugin's namespace: `anthropic-skills:pdf` reads `pdf`. */
@@ -282,26 +370,83 @@ function ensureLoaded($: EngineInterface): Promise<void> {
 }
 
 async function loadSaved($: EngineInterface) {
-  const [savedPins, savedUses, known, at] = await Promise.all([
+  const [savedPins, savedUses, known, savedHidden, at] = await Promise.all([
     stored<string[]>($, STORE_PINS, []),
     stored<Uses>($, STORE_USES, {}),
     stored<string[]>($, STORE_KNOWN, []),
+    stored<string[]>($, STORE_HIDDEN, []),
     $.clock.now(),
   ])
   Object.assign(local, {
     pins: savedPins,
     uses: savedUses,
     known,
+    hidden: savedHidden,
     monthCounts: countRecent(savedUses, at),
   })
-  await Promise.all([update($, pins, () => savedPins), update($, uses, () => savedUses)])
+  await Promise.all([
+    update($, pins, () => savedPins),
+    update($, uses, () => savedUses),
+    update($, hidden, () => savedHidden),
+  ])
+}
+
+async function homeDir($: EngineInterface): Promise<string | undefined> {
+  const home = await $.env.get('HOME').catch(() => undefined)
+
+  return home ?? (await $.env.get('USERPROFILE').catch(() => undefined))
+}
+
+/** The skills \`npx skills add\` installed, by name, with the repository each came from. */
+async function installedFrom($: EngineInterface, home?: string): Promise<Record<string, string>> {
+  const files = [
+    home && `${home}/${SKILL_LOCKS.home}`,
+    local.cwd && `${local.cwd}/${SKILL_LOCKS.project}`,
+  ].filter((path): path is string => Boolean(path))
+  const from: Record<string, string> = {}
+  for (const file of files) {
+    const lock = await $.fs
+      .read(file)
+      .then(text => JSON.parse(text) as { skills?: Record<string, { source?: unknown }> })
+      .catch(() => undefined)
+    for (const [name, entry] of Object.entries(lock?.skills ?? {})) {
+      if (typeof entry?.source === 'string') from[name] = entry.source
+    }
+  }
+
+  return from
+}
+
+/** Where one of your skills lives: its folder, or a command's file; the project's first. */
+async function locate($: EngineInterface, roots: readonly string[], name: string) {
+  if (!SAFE_NAME.test(name)) return undefined
+  for (const root of roots) {
+    const folder = `${root}/skills/${name}`
+    if (await $.fs.exists(`${folder}/SKILL.md`)) return folder
+    const file = `${root}/commands/${name.split(':').join('/')}.md`
+    if (await $.fs.exists(file)) return file
+  }
+
+  return undefined
 }
 
 async function refreshSkills($: EngineInterface) {
+  const home = await homeDir($)
+  const roots = [local.cwd && `${local.cwd}/.claude`, home && `${home}/.claude`].filter(
+    (root): root is string => Boolean(root),
+  )
+  const [infos, lock] = await Promise.all([$.command.list(), installedFrom($, home)])
   const list: SkillEntry[] = []
-  for (const info of await $.command.list()) {
-    const group = groupOf(info, local.known)
-    if (group) list.push({ name: info.name, description: info.description, group })
+  for (const info of infos) {
+    const kind = kindOf(info, local.known)
+    if (!kind || local.removed.includes(info.name)) continue
+    const entry: SkillEntry = { name: info.name, description: info.description, ...kind }
+    if (info.source === 'user') {
+      const path = await locate($, roots, info.name).catch(() => undefined)
+      if (path) entry.path = path
+      if (lock[info.name]) Object.assign(entry, { kind: 'installed', origin: lock[info.name] })
+    }
+    list.push(entry)
   }
 
   await update($, skills, () => list)
@@ -340,6 +485,50 @@ async function togglePin($: EngineInterface, name: string): Promise<boolean> {
   return local.pins.includes(name)
 }
 
+/** Hides a skill from the dock and the pane, or shows it again; a hidden pin is unpinned. */
+async function toggleHidden($: EngineInterface, name: string): Promise<boolean> {
+  local.hidden = await update($, hidden, list =>
+    list.includes(name) ? list.filter(n => n !== name) : [...list, name],
+  )
+  const isHidden = local.hidden.includes(name)
+  await $.store.set(STORE_HIDDEN, local.hidden)
+  if (isHidden && local.pins.includes(name)) await togglePin($, name)
+
+  return isHidden
+}
+
+/** Moves one of your skills out of Claude Code, into a folder it can be restored from. */
+async function removeSkill($: EngineInterface, s: SkillEntry) {
+  await update($, confirming, () => null)
+  const home = await homeDir($)
+  if (!s.path || !home) {
+    $.ui.toast(`Couldn't find where /${short(s.name)} lives, so it was left alone.`)
+    return
+  }
+
+  const stamp = new Date(await $.clock.now()).toISOString().slice(0, 19).replace(/[:T]/g, '-')
+  const folder = `${home}/${REMOVED_DIR}`
+  const isFile = s.path.endsWith('.md')
+  const target = `${folder}/${s.name.replace(/:/g, '-')}-${stamp}${isFile ? '.md' : ''}`
+  await $.fs.write(`${folder}/README.txt`, REMOVED_NOTE)
+  const isWindows = (await $.env.get('OS').catch(() => undefined)) === 'Windows_NT'
+  const moved = await $.process
+    .run(isWindows ? ['cmd', '/c', 'move', s.path, target] : ['mv', s.path, target])
+    .catch((error: unknown) => ({ exitCode: 1, stderr: String(error) }))
+  if (moved.exitCode !== 0) {
+    $.ui.toast(`Couldn't remove /${short(s.name)}: ${moved.stderr.trim() || 'the move failed'}`)
+    return
+  }
+
+  local.removed = [...local.removed, s.name]
+  if (local.pins.includes(s.name)) await togglePin($, s.name)
+  await update($, skills, list => list.filter(one => one.name !== s.name))
+  $.ui.toast(
+    `Removed /${short(s.name)}. It's in ~/${REMOVED_DIR} if you want it back; run /reload-skills to drop it from the / menu.`,
+    { timeoutMs: LONG_TOAST_MS },
+  )
+}
+
 async function insertSkill($: EngineInterface, name: string) {
   const draft = (await $.prompt.read()).text
   // Swap a slash command already at the front for this one, keep the rest of the draft.
@@ -357,19 +546,29 @@ async function openAll($: EngineInterface) {
   await update($, isInline, () => !opened.isPlaced)
 }
 
+/** A collapsible card's state and toggle, as the desktop app draws sections. */
+type Card = { key: string; isCollapsed: boolean; onToggle: () => unknown }
+
 /**
- * A band section. Stacked (the desktop app, a narrow terminal), its name heads it with `aside` at
- * the right, and the content spans the width below. Otherwise its name sits in the shared left
- * column, the content beside it and `aside` at the far right.
+ * A band section. In the desktop app it is a card, as the app's own sidebar draws them: a title
+ * whose chevron collapses it, `aside` at the right, the content below. In the terminal its name
+ * sits in the shared left column (above the content when narrow), the content beside it and
+ * `aside` at the far right.
  */
 function section(
   t: ElementTable,
   label: string,
   content: JSX.Element,
-  layout: { isStacked: boolean; aside?: JSX.Element; hasHint?: boolean; isCentred?: boolean },
+  layout: {
+    isStacked: boolean
+    aside?: JSX.Element
+    hasHint?: boolean
+    isCentred?: boolean
+    card?: Card
+  },
 ) {
-  const { Box, Text } = t
-  const { isStacked, aside, hasHint = false, isCentred = false } = layout
+  const { Box, Text, Button } = t
+  const { isStacked, aside, hasHint = false, isCentred = false, card } = layout
   const hint = hasHint && (
     <Box key={HINT_KEY}>
       <Text dimColor italic>
@@ -377,6 +576,33 @@ function section(
       </Text>
     </Box>
   )
+
+  if (card) {
+    return (
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={CARD_BORDER}
+        paddingX={CARD_PADDING.x}
+        paddingY={CARD_PADDING.y}
+      >
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
+          <Button
+            key={card.key}
+            plain
+            label={`${label}  ${card.isCollapsed ? '›' : '⌄'}`}
+            onPress={() => void card.onToggle()}
+          />
+          {aside}
+        </Box>
+        {!card.isCollapsed && (
+          <Box flexDirection="column" marginTop={1}>
+            {content}
+          </Box>
+        )}
+      </Box>
+    )
+  }
 
   if (isStacked) {
     return (
@@ -407,86 +633,268 @@ function section(
   )
 }
 
+const FILTER_LABEL: Record<PaneFilter, string> = {
+  all: 'All',
+  builtin: KIND_LABEL.builtin,
+  mine: KIND_LABEL.mine,
+  installed: KIND_LABEL.installed,
+  hidden: 'Hidden',
+}
+
+/** Everything the skill lists draw from, read together. */
+async function listState($: EngineInterface) {
+  const [pinned, used, list, hiddenList, filterBy, search, confirmingId, collapsed, at] =
+    await Promise.all([
+      read($, pins),
+      read($, uses),
+      read($, skills),
+      read($, hidden),
+      read($, filter),
+      read($, query),
+      read($, confirming),
+      read($, OWN_CARDS),
+      $.clock.now(),
+    ])
+
+  return { pinned, used, list, hiddenList, filterBy, search, confirmingId, collapsed, at }
+}
+
+type ListState = Awaited<ReturnType<typeof listState>>
+
 function skillRow(
   $: EngineInterface,
   t: ElementTable,
   list: string,
   s: SkillEntry,
-  isPinned: boolean,
-  meta = '',
+  row: {
+    isPinned: boolean
+    isHidden: boolean
+    isConfirming: boolean
+    isText: boolean
+    meta?: string
+  },
 ) {
   const { Box, Text, Button } = t
+  const plain = row.isText || undefined
+  // Where there's a pointer, a row's action shows only while it's hovered.
+  const reveal = row.isText ? {} : { display: 'none' as const, hover: { display: 'flex' as const } }
+  const action = row.isHidden
+    ? { label: 'Unhide', onPress: () => toggleHidden($, s.name) }
+    : s.path
+      ? { label: 'Remove', onPress: () => update($, confirming, () => `${list}:${s.name}`) }
+      : {
+          label: 'Hide',
+          onPress: async () => {
+            await toggleHidden($, s.name)
+            $.ui.toast(`Hid /${short(s.name)}. It's under Hidden in the skills pane.`)
+          },
+        }
 
   return (
-    <Box flexDirection="row" gap={1} alignItems="center">
-      <Button
-        key={`${list}-star-${s.name}`}
-        plain
-        dimColor={!isPinned}
-        label={isPinned ? '★' : '☆'}
-        onPress={async () => {
-          const nowPinned = await togglePin($, s.name)
-          $.ui.toast(`${nowPinned ? 'Pinned' : 'Unpinned'} /${short(s.name)}`)
-        }}
-      />
-      <Box flexGrow={1} flexShrink={1} minWidth={0}>
-        <Button
-          key={`${list}-use-${s.name}`}
-          plain
-          label={short(s.name)}
-          onPress={() => insertSkill($, s.name)}
-        />
+    <Box key={`${list}-row-${s.name}`} flexDirection="column">
+      <Box flexDirection="row" gap={1} alignItems="center">
+        {!row.isHidden && (
+          <Button
+            key={`${list}-star-${s.name}`}
+            plain
+            dimColor={!row.isPinned}
+            label={row.isPinned ? '★' : '☆'}
+            onPress={async () => {
+              const nowPinned = await togglePin($, s.name)
+              $.ui.toast(`${nowPinned ? 'Pinned' : 'Unpinned'} /${short(s.name)}`)
+            }}
+          />
+        )}
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Button
+            key={`${list}-use-${s.name}`}
+            plain
+            label={short(s.name)}
+            onPress={() => insertSkill($, s.name)}
+          />
+        </Box>
+        {row.meta !== undefined && <Text dimColor>{row.meta}</Text>}
+        <Box flexShrink={1} minWidth={0}>
+          <Text dimColor wrap="truncate-end">
+            {tagOf(s)}
+          </Text>
+        </Box>
+        <Box flexShrink={0} {...reveal}>
+          <Button
+            key={`${list}-act-${s.name}`}
+            plain
+            dimColor
+            label={action.label}
+            onPress={action.onPress}
+          />
+        </Box>
       </Box>
-      {meta !== '' && <Text dimColor>{meta}</Text>}
+      {row.isConfirming && (
+        <Box flexDirection="column" paddingLeft={2} marginTop={1} marginBottom={1}>
+          <Text wrap="wrap">
+            {`Remove /${short(s.name)} from Claude Code? It moves to ~/${REMOVED_DIR}, where you can restore it.`}
+          </Text>
+          <Box flexDirection="row" gap={1} marginTop={1}>
+            <Button
+              key={`${list}-remove-${s.name}`}
+              plain={plain}
+              variant="primary"
+              label="Remove"
+              onPress={() => removeSkill($, s)}
+            />
+            <Button
+              key={`${list}-cancel-${s.name}`}
+              plain={plain}
+              role="dismiss"
+              label="Cancel"
+              onPress={() => update($, confirming, () => null)}
+            />
+          </Box>
+        </Box>
+      )}
     </Box>
   )
 }
 
-/** Pinned, most used and every skill available here: the pane, or the list under the dock. */
+/**
+ * The skills pane, or the list under the dock: a search, filters by kind, then pinned, most used
+ * and every skill available here (or the hidden ones). The desktop pane draws each as a card.
+ */
 function skillList(
   $: EngineInterface,
   t: ElementTable,
-  state: { list: SkillEntry[]; pinned: string[]; used: Uses; at: number },
+  state: ListState,
+  view: { isText: boolean; hasCards: boolean },
 ) {
-  const { Box, Text } = t
-  const { list, pinned, used, at } = state
+  const { Box, Text, Button } = t
+  const { list, pinned, used, at, hiddenList, filterBy, search, confirmingId, collapsed } = state
   const byName = new Map(list.map(s => [s.name, s]))
   const entry = (name: string): SkillEntry =>
-    byName.get(name) ?? { name, description: '', group: 'Built-in' }
-  const mostUsed = frequent(list, [], used, at, PANE_FREQUENT)
-  const available = [...list].sort((a, b) => short(a.name).localeCompare(short(b.name)))
+    byName.get(name) ?? { name, description: '', kind: 'builtin' }
+  const shows = (s: SkillEntry) =>
+    matches(s, { filter: filterBy, query: search, hidden: hiddenList })
+  const isNarrowed = filterBy !== 'all' || search.trim() !== ''
   const row = (listName: string, s: SkillEntry, meta?: string) =>
-    skillRow($, t, listName, s, pinned.includes(s.name), meta)
+    skillRow($, t, listName, s, {
+      isPinned: pinned.includes(s.name),
+      isHidden: hiddenList.includes(s.name),
+      isConfirming: confirmingId === `${listName}:${s.name}`,
+      isText: view.isText,
+      ...(meta === undefined ? {} : { meta }),
+    })
 
-  const heading = (name: string, detail: string, isFirst = false) => (
-    <Box flexDirection="row" justifyContent="space-between" marginTop={isFirst ? 0 : 1}>
-      <Text dimColor bold>
-        {name.toUpperCase()}
-      </Text>
-      <Text dimColor>{detail}</Text>
-    </Box>
-  )
-  const empty = (text: string) => (
-    <Text dimColor italic>
-      {text}
-    </Text>
-  )
+  const counts: Record<PaneFilter, number> = {
+    all: list.filter(s => !hiddenList.includes(s.name)).length,
+    builtin: 0,
+    mine: 0,
+    installed: 0,
+    hidden: list.filter(s => hiddenList.includes(s.name)).length,
+  }
+  for (const s of list) if (!hiddenList.includes(s.name)) counts[s.kind] += 1
+  const filters = FILTERS.filter(f => f !== 'hidden' || counts.hidden > 0 || filterBy === 'hidden')
+
+  const group = (name: string, detail: string, rows: JSX.Element[], emptyText: string) => {
+    if (rows.length === 0 && isNarrowed) return null
+    const body =
+      rows.length > 0 ? (
+        <Box flexDirection="column">{rows}</Box>
+      ) : (
+        <Text dimColor italic>
+          {emptyText}
+        </Text>
+      )
+    if (view.hasCards) {
+      return section(t, name, body, {
+        isStacked: true,
+        aside: <Text dimColor>{detail}</Text>,
+        card: cardFor($, false, collapsed, name),
+      })
+    }
+
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text dimColor bold>
+            {name.toUpperCase()}
+          </Text>
+          <Text dimColor>{detail}</Text>
+        </Box>
+        {body}
+      </Box>
+    )
+  }
+
+  const sorted = (entries: SkillEntry[]) =>
+    [...entries].sort((a, b) => short(a.name).localeCompare(short(b.name)))
+  const groups =
+    filterBy === 'hidden'
+      ? [
+          group(
+            'Hidden',
+            `${counts.hidden}`,
+            sorted(list.filter(shows)).map(s => row('hidden', s)),
+            '',
+          ),
+        ]
+      : [
+          group(
+            'Pinned',
+            pinned.length ? `${pinned.length}` : '',
+            pinned
+              .map(entry)
+              .filter(shows)
+              .map(s => row('pinned', s)),
+            'Click ☆ next to a skill to pin it.',
+          ),
+          group(
+            'Most used',
+            `last ${WINDOW_DAYS} days`,
+            frequent(list.filter(shows), [], used, at, PANE_FREQUENT).map(s =>
+              row('used', s, `${recentCount(used[s.name], at)}×`),
+            ),
+            'Skills you use will show up here.',
+          ),
+          group(
+            'Available here',
+            `${list.filter(shows).length}`,
+            sorted(list.filter(shows)).map(s => row('all', s)),
+            'No skills here yet.',
+          ),
+        ]
+  const shown = groups.filter(Boolean)
 
   return (
-    <Box flexDirection="column">
-      {heading('Pinned', pinned.length ? `${pinned.length}` : '', true)}
-      {pinned.length === 0 && empty('Click ☆ next to a skill to pin it.')}
-      {pinned.map(name => row('pinned', entry(name)))}
-      {heading('Most used', `last ${WINDOW_DAYS} days`)}
-      {mostUsed.length === 0 && empty('Skills you use will show up here.')}
-      {mostUsed.map(s => row('used', s, `${recentCount(used[s.name], at)}×`))}
-      {heading('Available here', `${available.length}`)}
-      {available.map(s => row('all', s))}
+    <Box flexDirection="column" gap={SECTION_GAP}>
+      {'Input' in t && (
+        <t.Input
+          key="skills-search"
+          placeholder="Search skills"
+          value={search}
+          onInput={value => void update($, query, () => value)}
+          onSubmit={value => void update($, query, () => value)}
+        />
+      )}
+      <Box flexDirection="row" flexWrap="wrap" gap={2}>
+        {filters.map(f => (
+          <Button
+            key={`skills-filter-${f}`}
+            plain
+            dimColor={f !== filterBy}
+            label={`${FILTER_LABEL[f]} ${counts[f]}`}
+            onPress={() => update($, filter, () => f)}
+          />
+        ))}
+      </Box>
+      {shown}
+      {shown.length === 0 && (
+        <Text dimColor italic>
+          No skills match.
+        </Text>
+      )}
     </Box>
   )
 }
 
-/** The pinned and frequent chips that fit the dock, with the separator between the two kinds. */
 function chipRow($: EngineInterface, t: ElementTable, chips: Chip[], isText: boolean) {
   const { Text, Button } = t
   const row: JSX.Element[] = []
@@ -515,13 +923,14 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    await loadFolded($).catch(() => undefined)
+    local.cwd = e.cwd
+    await Promise.all([loadFolded($), loadCards($)]).catch(() => undefined)
     await Promise.all([
       $.command
         .register({
           name: 'dock',
           description: 'Show all your skills; pin favourites to the dock above the prompt',
-          argumentHint: '[pin <skill> | unpin <skill>]',
+          argumentHint: '[pin | unpin | hide | unhide <skill>]',
         })
         .catch(() => undefined),
       ensureLoaded($),
@@ -544,11 +953,16 @@ export const register: Register = (on, options) => {
     }
 
     const [verb, name] = (e.args ?? '').trim().split(/\s+/)
-    if ((verb === 'pin' || verb === 'unpin') && name) {
-      const skill = name.replace(/^\//, '')
+    const skill = (name ?? '').replace(/^\//, '')
+    if ((verb === 'pin' || verb === 'unpin') && skill) {
       if ((verb === 'pin') !== local.pins.includes(skill)) await togglePin($, skill)
 
       return { text: `${verb === 'pin' ? 'Pinned' : 'Unpinned'} /${skill}.` }
+    }
+    if ((verb === 'hide' || verb === 'unhide') && skill) {
+      if ((verb === 'hide') !== local.hidden.includes(skill)) await toggleHidden($, skill)
+
+      return { text: `${verb === 'hide' ? 'Hid' : 'Unhid'} /${skill}.` }
     }
 
     await openAll($)
@@ -573,13 +987,8 @@ export const register: Register = (on, options) => {
     const above = await next(e)
     if (e.props.hasSurvey || !runsOn(showIn, e.surface)) return above
 
-    const [pinned, used, list, inline, at] = await Promise.all([
-      read($, pins),
-      read($, uses),
-      read($, skills),
-      read($, isInline),
-      $.clock.now(),
-    ])
+    const [state, inline] = await Promise.all([listState($), read($, isInline)])
+    const { pinned, used, list, hiddenList, collapsed, at } = state
     const t = $.ui.resolve(e)
     const { Box, Text, Button } = t
     const isText = e.surface === 'terminal'
@@ -587,10 +996,13 @@ export const register: Register = (on, options) => {
     // The terminal takes no clicks outside fullscreen: say how to reach the buttons.
     const hasHint = isText && e.viewport?.isFullscreen !== true && !hasKey(above, HINT_KEY)
 
-    const allLabel = inline ? 'Close' : `All skills (${list.length}) ›`
+    const allLabel = inline ? 'Close' : `All skills (${list.length - hiddenList.length}) ›`
+    const shown = list.filter(s => !hiddenList.includes(s.name))
     const candidates = [
-      ...pinned.map(name => ({ name, label: `★ ${short(name)}`, isPinned: true })),
-      ...frequent(list, pinned, used, at, DOCK_FREQUENT).map(s => ({
+      ...pinned
+        .filter(name => !hiddenList.includes(name))
+        .map(name => ({ name, label: `★ ${short(name)}`, isPinned: true })),
+      ...frequent(shown, pinned, used, at, DOCK_FREQUENT).map(s => ({
         name: s.name,
         label: short(s.name),
         isPinned: false,
@@ -614,7 +1026,6 @@ export const register: Register = (on, options) => {
     return inPanel(
       $,
       t,
-      e.surface,
       above,
       section(
         t,
@@ -632,11 +1043,17 @@ export const register: Register = (on, options) => {
           </Box>
           {inline && (
             <Box flexDirection="column" marginTop={1}>
-              {skillList($, t, { list, pinned, used, at })}
+              {skillList($, t, state, { isText, hasCards: false })}
             </Box>
           )}
         </Box>,
-        { isStacked, aside: allButton, hasHint, isCentred: !inline },
+        {
+          isStacked,
+          aside: allButton,
+          hasHint,
+          isCentred: !inline,
+          card: cardFor($, isText, collapsed, DOCK_LABEL),
+        },
       ),
     )
   })
@@ -644,13 +1061,8 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (!runsOn(showIn, e.surface)) return next(e)
 
-    const [pinned, used, list, at] = await Promise.all([
-      read($, pins),
-      read($, uses),
-      read($, skills),
-      $.clock.now(),
-    ])
+    const isText = e.surface === 'terminal'
 
-    return skillList($, $.ui.resolve(e), { list, pinned, used, at })
+    return skillList($, $.ui.resolve(e), await listState($), { isText, hasCards: !isText })
   })
 }

@@ -39,6 +39,8 @@ declare module 'claude-code' {
       now: number
       handoff: Handoff | null
       panel: Panel | null
+      /** The names of the desktop app's cards left collapsed. */
+      collapsedCards: string[]
     }
     'message-queue': {
       messages: unknown[]
